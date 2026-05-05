@@ -1,0 +1,14 @@
+# Build artifacts
+*.BIN
+*.bin
+bin/
+
+# Editor/IDE files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Backup files
+*.bak
+*.old
