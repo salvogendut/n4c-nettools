@@ -18,6 +18,38 @@ This library provides a complete Z80 assembly network stack for developing netwo
 
 ### Core Library (`src/`)
 
+#### n4c-netinit-kv.s - Network Configuration Reader
+File-based network configuration system using key=value format.
+
+**Configuration File:** `N4C.CFG` (must be on same disk as application)
+
+**Format:**
+```
+IP=192.168.1.100
+MASK=255.255.255.0
+GW=192.168.1.1
+DNS=192.168.1.1
+```
+
+**Main Function:**
+- `N4C_INIT` - Read N4C.CFG and initialize W5100S
+  - Exit: Carry clear if OK, set on error
+  - Initializes W5100S with settings from config file
+  - Silent operation (no screen output)
+
+**Features:**
+- Key=value parser (keys: IP, MASK, GW, DNS)
+- CAS_IN_DIRECT file reading (handles all file sizes correctly)
+- Automatic W5100S initialization
+- Error handling for missing files
+
+**Usage in your application:**
+```z80
+    call N4C_INIT
+    jr c, config_error
+    ; Network is ready
+```
+
 #### w5100.s - W5100S Hardware Interface Layer
 Complete driver for W5100S Ethernet chip with socket-based networking.
 
@@ -112,16 +144,37 @@ Then in your main assembly file:
 
 **Important:** Each application should have its own copy of these files. This keeps your project self-contained and buildable without external dependencies.
 
-### 2. Initialize W5100S
+### 2. Initialize Network Configuration
 
-At startup, set the mode register:
+**Option A: Use n4c-netinit-kv.s (Recommended)**
+
+Create `N4C.CFG` on your disk:
+```
+IP=192.168.1.100
+MASK=255.255.255.0
+GW=192.168.1.1
+DNS=192.168.1.1
+```
+
+Then in your code:
+```z80
+    include "n4c-netinit-kv.s"
+    
+    call N4C_INIT
+    jr c, config_error
+    ; Network is ready, W5100S initialized
+```
+
+**Option B: Manual Initialization**
+
+Set the mode register and configure manually:
 ```z80
     ld bc, 0xFD20
     ld a, 3                     ; Auto-increment + indirect bus mode
     out (c), a
+    
+    ; Then configure IP, gateway, DNS via W5100_WRITE_REG
 ```
-
-Network configuration (IP, gateway, DNS) should be done via BASIC setup program or initialization code.
 
 ### 3. Example: TCP Connection
 
@@ -212,7 +265,7 @@ data_len:       equ $-udp_data
 - `0x0005` - Subnet Mask (SUBR0-3)
 - `0x0009` - Source Hardware Address (SHAR0-5)
 - `0x000F` - Source IP Address (SIPR0-3)
-- `0x0019` - DNS Server IP (N_DNSIP)
+- `0x0032` - DNS Server IP (4 bytes)
 
 ### Socket Registers (Socket 0: base 0x0400, Socket 1: base 0x0500, etc.)
 - `+0x00` - Mode (Sn_MR)
