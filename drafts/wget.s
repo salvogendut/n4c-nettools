@@ -2,17 +2,22 @@
 ; WGET.S  -  Simple HTTP file downloader for Amstrad CPC / AMSDOS
 ;            Uses n4c-nettools (salvogendut/n4c-nettools) library
 ;
-; Build (from your project directory, with library files copied in):
-;   pasmo --tapbas wget.s wget.tap
-;   (or: rasm wget.s -o wget.bin)
+; Build:
+;   cd drafts
+;   ./build_wget.sh
 ;
-; Usage: loaded and run via a BASIC stub, e.g.:
-;   10 MEMORY &3FFF
-;   20 LOAD "WGET.BIN",&4000
-;   30 CALL &4000
+; Usage:
+;   Run WGET.BAS which will:
+;     1. Prompt for URL (e.g., "http://example.com/files/test.txt")
+;     2. Parse URL into hostname, path, and filename
+;     3. Write these to memory (&3E00-&3F0B)
+;     4. Load and call this binary
 ;
-; The URL to fetch is configured in the data section below.
-; Downloaded file is saved as the filename also configured below.
+; The binary reads URL components from memory locations:
+;   &3E00: Hostname (null-terminated)
+;   &3E80: Path (null-terminated)
+;   &3F00: AMSDOS filename (11 bytes, space-padded)
+;   &3F0B: Filename length (1 byte)
 ;
 ; Requires N4C.CFG on the same disk:
 ;   IP=192.168.1.100
@@ -20,7 +25,7 @@
 ;   GW=192.168.1.1
 ;   DNS=8.8.8.8
 ;
-; Library files needed in same directory:
+; Library files needed for building:
 ;   w5100.s          - from n4c-nettools/src/
 ;   dns_simple.s     - from n4c-nettools/src/
 ;   n4c-netinit-kv.s - from n4c-nettools/src/
@@ -489,20 +494,18 @@ phdec_print:
         ret
 
 ; =============================================================================
-; CONFIGURATION  -  Edit these for your target
+; CONFIGURATION  -  Passed from BASIC via memory
 ; =============================================================================
+; Memory layout (populated by WGET.BAS):
+;   &3E00: Hostname (null-terminated, max 128 bytes)
+;   &3E80: Path (null-terminated, max 128 bytes)
+;   &3F00: AMSDOS filename (11 bytes, space-padded)
+;   &3F0B: Filename length (1 byte)
 
-cfg_host:
-        db      "example.com", 0        ; hostname to connect to
-
-cfg_path:
-        db      "/files/hello.txt", 0   ; path on the server
-
-cfg_fname:
-        db      "HELLO   TXT"           ; AMSDOS filename (11 chars, space-padded)
-                                        ; 8 chars name + 3 chars ext, no dot
-cfg_fname_len:
-        db      11                      ; length of above (CAS_OUT_OPEN needs this)
+cfg_host        equ     &3E00           ; hostname from BASIC
+cfg_path        equ     &3E80           ; path from BASIC
+cfg_fname       equ     &3F00           ; AMSDOS filename from BASIC
+cfg_fname_len   equ     &3F0B           ; address of filename length byte
 
 ; =============================================================================
 ; VARIABLES  (assembled into BSS-style area)
@@ -570,7 +573,7 @@ msg_close_err:
 
 http_get:       db      "GET ", 0
 http_ver:       db      " HTTP/1.0", &0D, &0A, "Host: ", 0
-http_end:       db      &0D, &0A, &0A, 0   ; blank line ends headers
+http_end:       db      &0D, &0A, &0D, &0A, 0   ; blank line ends headers (CRLF CRLF)
 
 ; =============================================================================
 ; LIBRARY INCLUDES  (copy these files from n4c-nettools/src/ to your project)
@@ -581,3 +584,6 @@ http_end:       db      &0D, &0A, &0A, 0   ; blank line ends headers
         include "dns_simple.s"
 
         end     WGET_START
+
+; RASM output directive
+SAVE 'WGET.BIN',#4000,$-#4000,AMSDOS
