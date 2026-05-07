@@ -229,8 +229,7 @@ file_ok:
         ld      (byte_count), a
         ld      (byte_count+1), a
         ld      (hdr_state), a  ; header scan state machine counter
-        ld      a, 0xFF
-        ld      (hdr_done), a   ; DEBUG: skip header parsing, write everything to disk
+        ld      (hdr_done), a   ; 0 = still in headers
 
 recv_loop:
         ; Always try to receive data before checking connection state.
@@ -252,24 +251,11 @@ recv_loop:
 process_chunk:
         ld      a, b
         or      c
-        jp      z, recv_chkconn ; chunk exhausted - check for more or connection close
+        jp      z, recv_loop    ; chunk exhausted - fetch more (don't check conn yet)
 
         ld      a, (hl)
         inc     hl
         dec     bc
-
-        ; Diagnostic: echo first 80 received bytes to screen as-is
-        push    af
-        ld      a, (dbg_left)
-        or      a
-        jr      z, dbg_skip
-        dec     a
-        ld      (dbg_left), a
-        pop     af
-        push    af
-        call    TXT_OUTPUT      ; print raw byte (shows HTTP response on screen)
-dbg_skip:
-        pop     af
 
         ; Are we already past the headers?
         ld      e, a            ; save byte
@@ -560,7 +546,6 @@ my_socket:      defb    0       ; socket handle (always 0 for TCP)
 hdr_done:       defb    0       ; 0x00 = in headers, 0xFF = in body
 hdr_state:      defb    0       ; header CRLF detector state (0-3)
 byte_count:     defw    0       ; bytes written to file
-dbg_left:       defb    80      ; diagnostic: bytes left to echo to screen
 
 ; HTTP request build buffer
 ; Max: "GET " + 255 + " HTTP/1.0\r\nHost: " + 255 + "\r\n\r\n" + null ~ 560 bytes
