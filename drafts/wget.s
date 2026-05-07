@@ -44,6 +44,7 @@ KM_WAIT_CHAR    equ     0xBB06  ; wait for keypress -> A
 ;            CAS_OUT_OPEN standard &BC8C -> GoTek &BC8C (no shift, confirmed working)
 CAS_OUT_OPEN    equ     0xBC8C  ; standard address, no shift
 CAS_OUT_CLOSE   equ     0xBC8F  ; standard address, no shift
+CAS_OUT_ABANDON equ     0xBC92  ; standard address - discard output file (no rename from $$)
 CAS_OUT_CHAR    equ     0xBC95  ; standard address, no shift (was wrongly &BC92 = ABANDON)
 
 ; -----------------------------------------------------------------------------
@@ -230,6 +231,8 @@ file_ok:
         ld      (byte_count+1), a
         ld      (hdr_state), a  ; header scan state machine counter
         ld      (hdr_done), a   ; 0 = still in headers
+        ld      (status_cnt), a ; counts bytes 0..9 to reach status digit
+        ld      (http_status), a ; will hold first digit of HTTP status code
 
 recv_loop:
         ; Always try to receive data before checking connection state.
@@ -257,8 +260,24 @@ process_chunk:
         inc     hl
         dec     bc
 
-        ; Are we already past the headers?
+        ; Capture HTTP status first digit (byte index 9 of response)
         ld      e, a            ; save byte
+        ld      a, (status_cnt)
+        cp      0xFF            ; 0xFF = already captured
+        jr      z, stat_done
+        cp      9               ; reached index 9?
+        jr      nz, stat_inc
+        ld      a, e
+        ld      (http_status), a ; save first digit of "NNN" status code
+        ld      a, 0xFF
+        ld      (status_cnt), a
+        jr      stat_done
+stat_inc:
+        inc     a
+        ld      (status_cnt), a
+stat_done:
+
+        ; Are we already past the headers?
         ld      a, (hdr_done)
         or      a
         jr      nz, write_byte  ; yes - write directly
@@ -321,7 +340,7 @@ hdr_s3: cp      3               ; got CRLFCR, waiting for final LF
 hdr_reset:
         xor     a
         ld      (hdr_state), a
-        jr      process_chunk
+        jp      process_chunk
 
 write_byte:
         ; Write byte in E to AMSDOS output file.
@@ -368,8 +387,21 @@ recv_done:
         call    PRINT_CRLF
 
         ; ------------------------------------------------------------------
-        ; Step 8: Close file
+        ; Step 8: Check HTTP status, then close or abandon file
         ; ------------------------------------------------------------------
+        ld      a, (http_status)
+        cp      '2'             ; 2xx = success
+        jr      z, do_close
+        ; Non-2xx response: abandon (discard) the file, report error
+        call    CAS_OUT_ABANDON
+        ld      hl, msg_http_err
+        call    PRINT_STR
+        ld      a, (http_status)
+        call    TXT_OUTPUT      ; print the status digit (e.g. '4' for 404)
+        call    PRINT_CRLF
+        jp      wget_close
+
+do_close:
         call    CAS_OUT_CLOSE
         jr      c, close_ok
         ld      hl, msg_close_err
@@ -546,6 +578,8 @@ my_socket:      defb    0       ; socket handle (always 0 for TCP)
 hdr_done:       defb    0       ; 0x00 = in headers, 0xFF = in body
 hdr_state:      defb    0       ; header CRLF detector state (0-3)
 byte_count:     defw    0       ; bytes written to file
+status_cnt:     defb    0       ; counts bytes toward index 9 (first status digit)
+http_status:    defb    0       ; first digit of HTTP status code ('2'=ok, '4'/'5'=error)
 
 ; HTTP request build buffer
 ; Max: "GET " + 255 + " HTTP/1.0\r\nHost: " + 255 + "\r\n\r\n" + null ~ 560 bytes
@@ -600,6 +634,8 @@ msg_disk_err:
         db      "ERROR: Disk write failed (full?).", 0x0D, 0x0A, 0
 msg_close_err:
         db      "ERROR: File close failed.", 0x0D, 0x0A, 0
+msg_http_err:
+        db      "ERROR: HTTP error ", 0
 
 http_get:       db      "GET ", 0
 http_ver:       db      " HTTP/1.0", 0x0D, 0x0A, "Host: ", 0
