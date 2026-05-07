@@ -1,0 +1,3 @@
+Hello from the Amstrad CPC!
+This is a test file.
+WGET is working!

@@ -22,6 +22,7 @@ N4C_INIT:
 
     ; Open file - NO messages while file is open!
     ld hl, N4C_CONFIG_FILENAME
+    ld b, 7                     ; CAS_IN_OPEN needs B = filename length
     call CAS_IN_OPEN
     jp nc, .file_not_found
 

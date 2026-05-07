@@ -2,7 +2,7 @@
 20 REM Memory layout:
 30 REM   &3E00: Hostname (null-terminated)
 40 REM   &3E80: Path (null-terminated)
-50 REM   &3F00: AMSDOS filename (11 bytes)
+50 REM   &3F00: Filename for CAS_OUT_OPEN
 60 REM   &3F0B: Filename length (1 byte)
 70 MODE 2:MEMORY &3DFF
 80 PRINT "WGET for Net4CPC"
@@ -23,32 +23,37 @@
 230 host$=LEFT$(url$,slash-1)
 240 path$=MID$(url$,slash)
 250 REM
-260 REM Extract filename from path (last component after /)
+260 REM Extract port from host (e.g. "host:8080") and filename from path
+261 prt=80
+262 colon=INSTR(host$,":")
+263 IF colon>0 THEN prt=VAL(MID$(host$,colon+1)):host$=LEFT$(host$,colon-1)
 270 REM
-280 fname$=""
+280 dfn$=""
 290 FOR i=LEN(path$) TO 1 STEP -1
 300   IF MID$(path$,i,1)="/" THEN GOTO 330
-310   fname$=MID$(path$,i,1)+fname$
+310   dfn$=MID$(path$,i,1)+dfn$
 320 NEXT i
 330 REM
 340 REM If no filename found, use default
 350 REM
-360 IF fname$="" THEN fname$="INDEX.HTM"
+360 IF dfn$="" THEN dfn$="INDEX.HTM"
 370 REM
 380 REM Convert filename to AMSDOS format (8.3)
 390 REM
-400 dot=INSTR(fname$,".")
-410 IF dot=0 THEN name$=fname$:ext$=""
-420 IF dot>0 THEN name$=LEFT$(fname$,dot-1):ext$=MID$(fname$,dot+1)
+400 dot=INSTR(dfn$,".")
+410 IF dot=0 THEN name$=dfn$:ext$=""
+420 IF dot>0 THEN name$=LEFT$(dfn$,dot-1):ext$=MID$(dfn$,dot+1)
 430 REM Truncate and uppercase
 440 name$=LEFT$(name$,8)
 450 ext$=LEFT$(ext$,3)
-460 name$=UPPER$(name$)
-470 ext$=UPPER$(ext$)
+460 temp$="":FOR i=1 TO LEN(name$):c=ASC(MID$(name$,i,1)):IF c>=97 AND c<=122 THEN c=c-32
+465 temp$=temp$+CHR$(c):NEXT i:name$=temp$
+470 temp$="":FOR i=1 TO LEN(ext$):c=ASC(MID$(ext$,i,1)):IF c>=97 AND c<=122 THEN c=c-32
+475 temp$=temp$+CHR$(c):NEXT i:ext$=temp$
 480 REM Pad with spaces
 490 WHILE LEN(name$)<8:name$=name$+" ":WEND
 500 WHILE LEN(ext$)<3:ext$=ext$+" ":WEND
-510 amsfname$=name$+ext$
+510 amsdfn$=name$+ext$
 520 REM
 530 REM Display parsed components
 540 REM
@@ -77,13 +82,20 @@
 770   addr=addr+1
 780 NEXT i
 790 POKE addr,0:REM null terminator
-800 REM Write AMSDOS filename to &3F00
+800 REM Build dotted filename for CAS (e.g. HELLO.TXT)
+805 nm$=name$
+806 WHILE LEN(nm$)>0 AND RIGHT$(nm$,1)=" ":nm$=LEFT$(nm$,LEN(nm$)-1):WEND
+807 ex$=ext$
+808 WHILE LEN(ex$)>0 AND RIGHT$(ex$,1)=" ":ex$=LEFT$(ex$,LEN(ex$)-1):WEND
+809 IF LEN(ex$)>0 THEN cf$=nm$+"."+ex$ ELSE cf$=nm$
 810 addr=&3F00
-820 FOR i=1 TO 11
-830   POKE addr,ASC(MID$(amsfname$,i,1))
-840   addr=addr+1
-850 NEXT i
-860 POKE &3F0B,11:REM filename length
+815 FOR i=1 TO LEN(cf$)
+820   POKE addr,ASC(MID$(cf$,i,1))
+825   addr=addr+1
+830 NEXT i
+840 POKE &3F0B,LEN(cf$):REM filename length for CAS_OUT_OPEN B register
+861 POKE &3F0C,prt MOD 256:REM port low byte
+862 POKE &3F0D,INT(prt/256):REM port high byte
 870 REM
 880 REM Load and run binary
 890 REM

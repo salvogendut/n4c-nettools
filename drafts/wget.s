@@ -31,30 +31,25 @@
 ;   n4c-netinit-kv.s - from n4c-nettools/src/
 ; =============================================================================
 
-        org     &4000           ; standard CPC binary load address
+        org     0x4000          ; standard CPC binary load address
 
 ; -----------------------------------------------------------------------------
 ; AMSDOS / Firmware entry points
 ; -----------------------------------------------------------------------------
-TXT_OUTPUT      equ     &BB5A   ; output char in A to screen
-KM_WAIT_CHAR    equ     &BB06   ; wait for keypress -> A
-CAS_OUT_OPEN    equ     &BC8C   ; open file for output
-CAS_OUT_CLOSE   equ     &BC92   ; close output file (flush + write EOF)
-CAS_OUT_CHAR    equ     &BC9E   ; write byte in A to open output file
-CAS_IN_OPEN     equ     &BC94   ; open file for input (existence test)
-CAS_IN_CLOSE    equ     &BC98   ; close input file
-TXT_CUR_OFF     equ     &BB84   ; turn cursor off
-TXT_CUR_ON      equ     &BB87   ; turn cursor on
+TXT_OUTPUT      equ     0xBB5A  ; output char in A to screen
+KM_WAIT_CHAR    equ     0xBB06  ; wait for keypress -> A
+; GoTek/AMSDOS: CAS INPUT routines shifted +3 from standard (one extra entry
+; inserted before IN section). CAS OUTPUT routines stay at standard addresses.
+; Confirmed: CAS_IN_OPEN standard &BC74 -> GoTek &BC77 (+3)
+;            CAS_OUT_OPEN standard &BC8C -> GoTek &BC8C (no shift, confirmed working)
+CAS_OUT_OPEN    equ     0xBC8C  ; standard address, no shift
+CAS_OUT_CLOSE   equ     0xBC8F  ; standard address, no shift
+CAS_OUT_CHAR    equ     0xBC95  ; standard address, no shift (was wrongly &BC92 = ABANDON)
 
 ; -----------------------------------------------------------------------------
-; n4c-nettools constants  (must match w5100.s)
-; -----------------------------------------------------------------------------
-SK_STREAM       equ     1       ; TCP socket type
-SL_RECV         equ     1       ; SELECT: check for received data
-
 ; Receive buffer size - keep well within CPC RAM.
-; With org &4000 and typical code size, &6000 onward is safe.
-; Adjust if your code grows.
+; With org 0x4000 and typical code size, 0x6000 onward is safe.
+; -----------------------------------------------------------------------------
 RECV_BUF_SIZE   equ     512     ; bytes per NET_RECV call
 
 ; =============================================================================
@@ -85,17 +80,29 @@ init_ok:
         call    PRINT_STR
 
         ; ------------------------------------------------------------------
-        ; Step 2: DNS resolution
+        ; Step 2: Resolve hostname or parse dotted IP directly
         ; ------------------------------------------------------------------
+        ; If hostname starts with a digit it's a dotted IP - skip DNS
+        ld      a, (cfg_host)
+        cp      '0'
+        jp      c, do_dns
+        cp      '9'+1
+        jp      nc, do_dns
+
+        ld      hl, cfg_host
+        ld      de, server_ip
+        call    PARSE_DOTTED_IP
+        jr      dns_ok
+
+do_dns:
         ld      hl, msg_resolving
         call    PRINT_STR
-        ld      hl, cfg_host    ; null-terminated hostname
+        ld      hl, cfg_host
         call    PRINT_STR
         call    PRINT_CRLF
-
-        ld      hl, cfg_host    ; Entry: HL = hostname (null-terminated)
-        ld      de, server_ip   ; Entry: DE = 4-byte result buffer
-        call    RESOLVE_HOSTNAME ; from dns_simple.s
+        ld      hl, cfg_host
+        ld      de, server_ip
+        call    RESOLVE_HOSTNAME
         jr      nc, dns_ok
         ld      hl, msg_dns_err
         call    PRINT_STR
@@ -105,33 +112,36 @@ dns_ok:
         ld      hl, msg_resolved
         call    PRINT_STR
         ld      hl, server_ip
-        call    PRINT_IP        ; show resolved IP
+        call    WGET_PRINT_IP
         call    PRINT_CRLF
 
         ; ------------------------------------------------------------------
-        ; Step 3: Open TCP socket
+        ; Step 3: Open TCP socket 0
         ; ------------------------------------------------------------------
         ld      hl, msg_connecting
         call    PRINT_STR
 
         ld      a, 0            ; socket number 0
-        ld      d, SK_STREAM    ; TCP
-        ld      e, 0            ; flags = 0
-        call    SOCKET          ; from w5100.s
+        ld      b, 1            ; TCP protocol
+        call    NET_SOCKET      ; from w5100.s
         jr      nc, sock_ok
         ld      hl, msg_sock_err
         call    PRINT_STR
         jp      wget_exit
 
 sock_ok:
-        ld      (my_socket), a  ; save socket handle
+        xor     a
+        ld      (my_socket), a  ; socket 0 (NET_SOCKET doesn't return a number)
 
         ; ------------------------------------------------------------------
         ; Step 4: Connect to server
         ; ------------------------------------------------------------------
         ld      hl, server_ip   ; Entry: HL = 4-byte IP
-        ld      bc, 80          ; Entry: BC = port number
-        call    CONNECT         ; from w5100.s
+        ld      hl, (cfg_port)  ; load port (little-endian: L=low byte, H=high byte)
+        ld      b, h            ; B = high byte of port (NET_CONNECT wants B=high)
+        ld      c, l            ; C = low byte of port
+        ld      hl, server_ip
+        call    NET_CONNECT     ; from w5100.s
         jr      nc, conn_ok
         ld      hl, msg_conn_err
         call    PRINT_STR
@@ -166,14 +176,7 @@ conn_ok:
         call    STRCPY_DE
         ld      hl, http_end            ; "\r\n\r\n"
         call    STRCPY_DE
-        ; DE now points one past terminating null - compute length
-        ld      hl, req_buf
-        ; BC = DE - HL = request length (without null)
-        ld      b, d
-        ld      c, e
-        or      a
-        sbc     hl, bc          ; HL = -(length)  -- we need DE-req_buf
-        ; Actually compute length properly:
+        ; Compute request length
         ld      hl, req_buf
         ld      b, 0
         ld      c, 0
@@ -200,17 +203,15 @@ send_ok:
         ; ------------------------------------------------------------------
         ; Step 6: Open local output file
         ; ------------------------------------------------------------------
-        ; CAS_OUT_OPEN: HL=length of filename, DE=address of filename,
-        ;               A=file type (&16 = BINARY for generic data)
-        ;               BC= entry length (not used for type &16, set 0)
+        ; CAS_OUT_OPEN: B=length of filename, HL=address of filename,
+        ;               A=file type (2=binary)
+        ; Carry SET = success, Carry CLEAR = failure
         ld      a, (cfg_fname_len)
-        ld      h, 0
-        ld      l, a            ; HL = filename length
-        ld      de, cfg_fname   ; DE = filename string (no null needed by CAS)
-        ld      a, &16          ; file type: unformatted binary / generic
-        ld      bc, 0
+        ld      b, a            ; B = filename length
+        ld      hl, cfg_fname   ; HL = filename address
+        ld      a, 2            ; file type: binary
         call    CAS_OUT_OPEN
-        jr      nc, file_ok
+        jr      c, file_ok
         ld      hl, msg_file_err
         call    PRINT_STR
         jp      wget_close
@@ -222,41 +223,53 @@ file_ok:
         ; We receive chunks into recv_buf, scan for end of HTTP headers
         ; (\r\n\r\n), then write only the body bytes to the file.
         ;
-        ; State variable 'hdr_done': 0 = still in headers, &FF = body mode
+        ; State variable 'hdr_done': 0 = still in headers, 0xFF = body mode
         ; ------------------------------------------------------------------
         xor     a
-        ld      (hdr_done), a   ; start in header-scanning mode
         ld      (byte_count), a
         ld      (byte_count+1), a
         ld      (hdr_state), a  ; header scan state machine counter
+        ld      a, 0xFF
+        ld      (hdr_done), a   ; DEBUG: skip header parsing, write everything to disk
 
 recv_loop:
-        ; Check if connection still alive first
-        ld      a, (my_socket)
-        call    CHECK_CONNECTION ; from w5100.s, nc=connected, c=closed
-        jr      c, recv_done    ; server closed connection -> we're done
-
-        ; Try to receive a chunk
+        ; Always try to receive data before checking connection state.
+        ; The W5100S buffers data that arrived before the server's FIN;
+        ; checking connection first would cause us to jump to recv_done
+        ; and miss that buffered data.
         ld      hl, recv_buf
         ld      bc, RECV_BUF_SIZE
         call    NET_RECV        ; Entry: HL=buffer, BC=max bytes
-                                ; Exit:  BC=bytes actually received, nc=ok, c=err/none
-        jr      c, recv_loop    ; nothing yet (or error), keep polling
+                                ; Exit:  BC=bytes actually received, nc=ok, c=none
+        jp      c, recv_chkconn ; no data right now - check connection state
         ld      a, b
         or      c
-        jr      z, recv_loop    ; zero bytes, keep polling
+        jp      z, recv_chkconn ; zero bytes - check connection state
 
-        ; Process the received chunk (BC bytes at recv_buf)
+        ; Data received - process the chunk (BC bytes starting at recv_buf)
         ld      hl, recv_buf
 
 process_chunk:
         ld      a, b
         or      c
-        jr      z, recv_loop    ; chunk exhausted, get next
+        jp      z, recv_chkconn ; chunk exhausted - check for more or connection close
 
         ld      a, (hl)
         inc     hl
         dec     bc
+
+        ; Diagnostic: echo first 80 received bytes to screen as-is
+        push    af
+        ld      a, (dbg_left)
+        or      a
+        jr      z, dbg_skip
+        dec     a
+        ld      (dbg_left), a
+        pop     af
+        push    af
+        call    TXT_OUTPUT      ; print raw byte (shows HTTP response on screen)
+dbg_skip:
+        pop     af
 
         ; Are we already past the headers?
         ld      e, a            ; save byte
@@ -265,7 +278,7 @@ process_chunk:
         jr      nz, write_byte  ; yes - write directly
 
         ; Header scan state machine
-        ; We look for the sequence CR LF CR LF (&0D &0A &0D &0A)
+        ; We look for the sequence CR LF CR LF (0x0D 0x0A 0x0D 0x0A)
         ; State: 0=idle, 1=CR, 2=CRLF, 3=CRLFCR, 4=CRLFCRLF(done)
         ld      a, e            ; restore byte
         ld      d, a            ; keep copy
@@ -275,8 +288,8 @@ process_chunk:
         or      a
         jr      nz, hdr_s1
         ld      a, d
-        cp      &0D
-        jr      nz, process_chunk  ; not CR, stay in state 0 (bc already decremented)
+        cp      0x0D
+        jr      nz, process_chunk
         ld      a, 1
         ld      (hdr_state), a
         jr      process_chunk
@@ -284,13 +297,13 @@ process_chunk:
 hdr_s1: cp      1               ; got CR, waiting for LF
         jr      nz, hdr_s2
         ld      a, d
-        cp      &0A
+        cp      0x0A
         jr      z, hdr_s1lf
-        cp      &0D             ; another CR? stay in state 1
-        jr      z, process_chunk
+        cp      0x0D            ; another CR? stay in state 1
+        jp      z, process_chunk
         xor     a               ; anything else: back to 0
         ld      (hdr_state), a
-        jr      process_chunk
+        jp      process_chunk
 hdr_s1lf:
         ld      a, 2
         ld      (hdr_state), a
@@ -299,7 +312,7 @@ hdr_s1lf:
 hdr_s2: cp      2               ; got CRLF, waiting for second CR
         jr      nz, hdr_s3
         ld      a, d
-        cp      &0D
+        cp      0x0D
         jr      z, hdr_s2cr
         xor     a
         ld      (hdr_state), a
@@ -312,12 +325,12 @@ hdr_s2cr:
 hdr_s3: cp      3               ; got CRLFCR, waiting for final LF
         jr      nz, hdr_reset
         ld      a, d
-        cp      &0A
+        cp      0x0A
         jr      nz, hdr_reset
         ; Found CRLFCRLF - headers done!
-        ld      a, &FF
+        ld      a, 0xFF
         ld      (hdr_done), a
-        jr      process_chunk   ; byte after separator goes to write_byte next iter
+        jr      process_chunk
 
 hdr_reset:
         xor     a
@@ -325,33 +338,45 @@ hdr_reset:
         jr      process_chunk
 
 write_byte:
-        ; Write byte in E to AMSDOS output file
+        ; Write byte in E to AMSDOS output file.
+        ; CAS_OUT_CHAR trashes HL and BC, so save/restore the recv_buf
+        ; pointer (HL) and remaining-bytes counter (BC) around the call.
+        push    hl              ; save recv_buf pointer
+        push    bc              ; save remaining byte count
         ld      a, e
         call    CAS_OUT_CHAR
-        jr      nc, write_ok
+        pop     bc              ; restore remaining count
+        pop     hl              ; restore recv_buf pointer
+        jr      c, write_ok
         ; Write error (disk full?)
         ld      hl, msg_disk_err
         call    PRINT_STR
         jp      file_close_err
 
 write_ok:
-        ; Increment 16-bit byte counter for progress display
+        ; Increment 16-bit byte counter; print a dot every 256 bytes.
+        ; Must keep HL (recv_buf ptr) and BC (remaining count) intact.
+        push    hl
+        push    bc
         ld      hl, (byte_count)
         inc     hl
         ld      (byte_count), hl
-        ; Print a dot every 512 bytes as progress indicator
         ld      a, l
-        and     &01             ; every 512 bytes (bit 9 of counter toggling)
-        ld      a, h
-        and     &02
-        or      l               ; crude: dot when low byte wraps
-        ; simpler: just dot every 256 bytes (when L wraps to 0)
-        ld      a, (byte_count) ; low byte
+        pop     bc
+        pop     hl
         or      a
-        jr      nz, process_chunk
+        jp      nz, process_chunk
         ld      a, '.'
-        call    TXT_OUTPUT
-        jr      process_chunk
+        call    TXT_OUTPUT      ; preserves HL, BC per firmware convention
+        jp      process_chunk
+
+recv_chkconn:
+        ; No data from NET_RECV - check whether the server has closed.
+        ; Only exit when both conditions are true: no data AND connection gone.
+        ld      a, (my_socket)
+        call    CHECK_CONNECTION
+        jp      c, recv_done    ; closed (CLOSE_WAIT or CLOSED) → done
+        jp      recv_loop       ; still open → keep polling
 
 recv_done:
         call    PRINT_CRLF
@@ -360,7 +385,7 @@ recv_done:
         ; Step 8: Close file
         ; ------------------------------------------------------------------
         call    CAS_OUT_CLOSE
-        jr      nc, close_ok
+        jr      c, close_ok
         ld      hl, msg_close_err
         call    PRINT_STR
         jp      wget_close
@@ -368,7 +393,6 @@ recv_done:
 close_ok:
         ld      hl, msg_done
         call    PRINT_STR
-        ; Print byte count
         ld      hl, (byte_count)
         call    PRINT_HL_DEC
         ld      hl, msg_bytes
@@ -384,7 +408,7 @@ wget_close:
         call    CLOSE           ; from w5100.s
 
 wget_exit:
-        ld      hl, msg_press_key
+        ld      hl, wget_msg_press_key
         call    PRINT_STR
         call    KM_WAIT_CHAR
 
@@ -406,9 +430,9 @@ PRINT_STR:
 
 ; PRINT_CRLF: print CR+LF
 PRINT_CRLF:
-        ld      a, &0D
+        ld      a, 0x0D
         call    TXT_OUTPUT
-        ld      a, &0A
+        ld      a, 0x0A
         call    TXT_OUTPUT
         ret
 
@@ -423,20 +447,39 @@ STRCPY_DE:
         inc     de
         jr      STRCPY_DE
 
-; PRINT_IP: print 4-byte IP address at HL as "a.b.c.d"
-PRINT_IP:
+; PARSE_DOTTED_IP: parse "a.b.c.d" string at HL into 4 bytes at DE
+; parse_decimal_byte (from n4c-netinit-kv.s) clobbers DE, so save/restore it
+PARSE_DOTTED_IP:
         push    bc
         ld      b, 4
-print_ip_loop:
+pdip_octet:
+        push    de                  ; save dest pointer - parse_decimal_byte trashes DE
+        call    parse_decimal_byte  ; A = octet, HL advanced past digits
+        pop     de                  ; restore dest pointer
+        ld      (de), a
+        inc     de
+        dec     b
+        jr      z, pdip_done
+        inc     hl                  ; skip '.'
+        jr      pdip_octet
+pdip_done:
+        pop     bc
+        ret
+
+; WGET_PRINT_IP: print 4-byte IP address at HL as "a.b.c.d"
+WGET_PRINT_IP:
+        push    bc
+        ld      b, 4
+wget_ip_loop:
         ld      a, (hl)
         inc     hl
         call    PRINT_BYTE_DEC
         dec     b
-        jr      z, print_ip_done
+        jr      z, wget_ip_done
         ld      a, '.'
         call    TXT_OUTPUT
-        jr      print_ip_loop
-print_ip_done:
+        jr      wget_ip_loop
+wget_ip_done:
         pop     bc
         ret
 
@@ -458,6 +501,7 @@ PRINT_HL_DEC:
         push    bc
         push    de
         push    af
+        ld      d, 0            ; leading-zero suppression flag: 0=suppress
         ld      bc, -10000
         call    phdec_digit
         ld      bc, -1000
@@ -473,7 +517,6 @@ PRINT_HL_DEC:
         pop     de
         pop     bc
         ret
-        ; leading zero suppression flag in D: 0=suppress, &FF=print
 phdec_digit:
         ld      a, '0'-1
 phdec_sub:
@@ -489,7 +532,7 @@ phdec_sub:
         ret     z               ; suppress leading zero
         ld      a, e
 phdec_print:
-        ld      d, &FF          ; leading zeros done
+        ld      d, 0xFF         ; leading zeros done
         call    TXT_OUTPUT
         ret
 
@@ -502,20 +545,22 @@ phdec_print:
 ;   &3F00: AMSDOS filename (11 bytes, space-padded)
 ;   &3F0B: Filename length (1 byte)
 
-cfg_host        equ     &3E00           ; hostname from BASIC
-cfg_path        equ     &3E80           ; path from BASIC
-cfg_fname       equ     &3F00           ; AMSDOS filename from BASIC
-cfg_fname_len   equ     &3F0B           ; address of filename length byte
+cfg_host        equ     0x3E00          ; hostname from BASIC
+cfg_path        equ     0x3E80          ; path from BASIC
+cfg_fname       equ     0x3F00          ; AMSDOS filename from BASIC
+cfg_fname_len   equ     0x3F0B          ; address of filename length byte
+cfg_port        equ     0x3F0C          ; port number from BASIC (16-bit little-endian)
 
 ; =============================================================================
 ; VARIABLES  (assembled into BSS-style area)
 ; =============================================================================
 
 server_ip:      defs    4, 0    ; resolved IP address
-my_socket:      defb    0       ; socket handle returned by SOCKET
-hdr_done:       defb    0       ; &00 = in headers, &FF = in body
+my_socket:      defb    0       ; socket handle (always 0 for TCP)
+hdr_done:       defb    0       ; 0x00 = in headers, 0xFF = in body
 hdr_state:      defb    0       ; header CRLF detector state (0-3)
 byte_count:     defw    0       ; bytes written to file
+dbg_left:       defb    80      ; diagnostic: bytes left to echo to screen
 
 ; HTTP request build buffer
 ; Max: "GET " + 255 + " HTTP/1.0\r\nHost: " + 255 + "\r\n\r\n" + null ~ 560 bytes
@@ -529,51 +574,51 @@ recv_buf:       defs    RECV_BUF_SIZE, 0
 ; =============================================================================
 
 msg_banner:
-        db      "WGET for CPC / Net4CPC", &0D, &0A
-        db      "============================", &0D, &0A, 0
+        db      "WGET for CPC / Net4CPC", 0x0D, 0x0A
+        db      "============================", 0x0D, 0x0A, 0
 msg_init:
         db      "Initialising network...", 0
 msg_ok:
-        db      " OK", &0D, &0A, 0
+        db      " OK", 0x0D, 0x0A, 0
 msg_resolving:
         db      "Resolving: ", 0
 msg_resolved:
         db      "Server IP: ", 0
 msg_connecting:
-        db      "Connecting to port 80...", 0
+        db      "Connecting...", 0
 msg_connected:
-        db      " OK", &0D, &0A, 0
+        db      " OK", 0x0D, 0x0A, 0
 msg_sending:
-        db      "Sending GET request...", &0D, &0A, 0
+        db      "Sending GET request...", 0x0D, 0x0A, 0
 msg_receiving:
         db      "Receiving", 0
 msg_done:
-        db      &0D, &0A, "Done! ", 0
+        db      0x0D, 0x0A, "Done! ", 0
 msg_bytes:
-        db      " bytes saved.", &0D, &0A, 0
-msg_press_key:
-        db      "Press any key.", &0D, &0A, 0
+        db      " bytes saved.", 0x0D, 0x0A, 0
+wget_msg_press_key:
+        db      "Press any key.", 0x0D, 0x0A, 0
 
 msg_init_err:
-        db      "ERROR: N4C.CFG not found or bad config.", &0D, &0A, 0
+        db      "ERROR: N4C.CFG not found or bad config.", 0x0D, 0x0A, 0
 msg_dns_err:
-        db      "ERROR: DNS resolution failed.", &0D, &0A, 0
+        db      "ERROR: DNS resolution failed.", 0x0D, 0x0A, 0
 msg_sock_err:
-        db      "ERROR: Could not open socket.", &0D, &0A, 0
+        db      "ERROR: Could not open socket.", 0x0D, 0x0A, 0
 msg_conn_err:
-        db      "ERROR: Connection refused or timeout.", &0D, &0A, 0
+        db      "ERROR: Connection refused or timeout.", 0x0D, 0x0A, 0
 msg_send_err:
-        db      "ERROR: Send failed.", &0D, &0A, 0
+        db      "ERROR: Send failed.", 0x0D, 0x0A, 0
 msg_file_err:
-        db      "ERROR: Could not open output file.", &0D, &0A, 0
+        db      "ERROR: Could not open output file.", 0x0D, 0x0A, 0
 msg_disk_err:
-        db      "ERROR: Disk write failed (full?).", &0D, &0A, 0
+        db      "ERROR: Disk write failed (full?).", 0x0D, 0x0A, 0
 msg_close_err:
-        db      "ERROR: File close failed.", &0D, &0A, 0
+        db      "ERROR: File close failed.", 0x0D, 0x0A, 0
 
 http_get:       db      "GET ", 0
-http_ver:       db      " HTTP/1.0", &0D, &0A, "Host: ", 0
-http_end:       db      &0D, &0A, &0D, &0A, 0   ; blank line ends headers (CRLF CRLF)
+http_ver:       db      " HTTP/1.0", 0x0D, 0x0A, "Host: ", 0
+http_end:       db      0x0D, 0x0A, 0x0D, 0x0A, 0
 
 ; =============================================================================
 ; LIBRARY INCLUDES  (copy these files from n4c-nettools/src/ to your project)
@@ -583,7 +628,4 @@ http_end:       db      &0D, &0A, &0D, &0A, 0   ; blank line ends headers (CRLF 
         include "w5100.s"
         include "dns_simple.s"
 
-        end     WGET_START
-
-; RASM output directive
 SAVE 'WGET.BIN',#4000,$-#4000,AMSDOS
