@@ -4,35 +4,44 @@ Z80 assembly network library and ready-to-run tools for the Amstrad CPC with [Ne
 
 ## What's in the box
 
-| Item | Status | Description |
-|------|--------|-------------|
-| `src/w5100.s` | Library | W5100S chip driver — sockets, TCP, UDP, buffers |
-| `src/dns_simple.s` | Library | DNS resolver (RFC 1034 A-record lookups) |
-| `src/n4c-netinit-kv.s` | Library | Reads `N4C.CFG`, configures W5100S — preferred initializer |
-| `src/n4c-netinit.s` | Library | Simpler alternative initializer (no file parsing) |
-| `src/ntp/ntp.s` | Tool | SNTPv4 time client — displays UTC date/time |
-| `src/wget/wget.s` | Tool | HTTP file downloader — fetches files over the network |
+| Item | Description |
+|------|-------------|
+| `src/w5100.s` | W5100S chip driver — sockets, TCP, UDP, buffers |
+| `src/dns_simple.s` | DNS resolver (RFC 1034 A-record lookups) |
+| `src/n4c-netinit-kv.s` | Reads `N4C.CFG`, configures W5100S — preferred initializer |
+| `src/n4c-netinit.s` | Simpler alternative initializer (no file parsing) |
+| `src/ntp/` | SNTPv4 time client — resolves pool, displays UTC date/time |
+| `src/wget/` | HTTP file downloader — fetches files from a URL and saves to disk |
+| `src/n4cewenterm/` | ANSI Telnet terminal client — full VT100/ANSI emulation over TCP |
 
 ## Quick start — running the tools
 
-Pre-built binaries are in `tools/bin/`. Copy to your CPC disk:
-
-```
-NTP.BIN   NTP.BAS   WGET.BIN   WGET.BAS   N4C.CFG
-```
-
-Also copy your `N4C.CFG` (see [Configuration](#configuration) below).
+Pre-built binaries are in `tools/bin/`. Copy what you need to your CPC disk along with `N4C.CFG` (see [Configuration](#configuration) below).
 
 **NTP** — display current UTC time:
+```
+NTP.BIN  NTP.BAS  N4C.CFG
+```
 ```basic
 RUN"NTP
 ```
 
 **WGET** — download a file from a web server:
+```
+WGET.BIN  WGET.BAS  N4C.CFG
+```
 ```basic
 RUN"WGET
 ```
 The BASIC loader prompts for a URL and saves the file to disk.
+
+**n4cewenterm** — ANSI Telnet terminal:
+```
+N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN  N4C.CFG
+```
+```basic
+RUN"N4CEWEN
+```
 
 ## Building from source
 
@@ -58,16 +67,23 @@ src/
   n4c-netinit-kv.s      N4C.CFG reader + W5100S init (library)
   n4c-netinit.s         Simple initializer (library)
   ntp/
-    ntp.s               NTP tool source
-    NTP.BAS             BASIC loader for NTP
+    ntp.s               SNTPv4 time client
+    NTP.BAS             BASIC loader
   wget/
-    wget.s              WGET tool source
-    WGET.BAS            BASIC loader for WGET
+    wget.s              HTTP file downloader
+    WGET.BAS            BASIC loader
+  n4cewenterm/
+    termN4C.s           Main entry point
+    charset.s           Code page 437 character set (loaded at 0x6800)
+    main.s  ansiterm.s  screen.s  telnetfunc_n4c.s
+    negotiate.s  urlmenu_n4c.s  data.s
+    N4CEWEN.BAS         BASIC loader
 tools/
-  bin/                  Built binaries (committed — copy to CPC disk)
-    NTP.BIN  NTP.BAS
-    WGET.BIN WGET.BAS
-build.sh                Builds all tools → tools/bin/
+  bin/                  Built binaries — committed, ready to copy to CPC disk
+    NTP.BIN    NTP.BAS
+    WGET.BIN   WGET.BAS
+    N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
+build.sh                ./build.sh builds all tools → tools/bin/
 examples/
   dnstest.s             Library usage example (DNS resolution)
 docs/
@@ -206,7 +222,7 @@ cd examples && ./build_dnstest.sh
 
 ## Applications using this library
 
-- **n4cewenterm** — ANSI Telnet client for the Amstrad CPC
+- **n4cewenterm** — ANSI Telnet terminal client (now part of this repo, `src/n4cewenterm/`)
 
 ## Credits
 
