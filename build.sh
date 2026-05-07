@@ -52,6 +52,23 @@ build_tool() {
 build_tool ntp  ntp.s  NTP.BIN  NTP.BAS
 build_tool wget wget.s WGET.BIN WGET.BAS
 
+# n4cewenterm: two separate assemblies (charset + main binary)
+echo ""
+echo "Building n4cewenterm (CHARSET.BIN + N4CEWEN.BIN)..."
+EWEN_DIR="$SRC_DIR/n4cewenterm"
+cp "$SRC_DIR/w5100.s" "$SRC_DIR/dns_simple.s" "$SRC_DIR/n4c-netinit-kv.s" "$EWEN_DIR/"
+(cd "$EWEN_DIR" && $RASM charset.s && $RASM termN4C.s)
+status=$?
+rm -f "$EWEN_DIR/w5100.s" "$EWEN_DIR/dns_simple.s" "$EWEN_DIR/n4c-netinit-kv.s"
+if [ $status -ne 0 ]; then
+    echo "FAILED: n4cewenterm"
+    exit 1
+fi
+mv "$EWEN_DIR/CHARSET.BIN" "$BIN_DIR/"
+mv "$EWEN_DIR/N4CEWEN.BIN" "$BIN_DIR/"
+cp "$EWEN_DIR/N4CEWEN.BAS" "$BIN_DIR/"
+echo "OK: CHARSET.BIN + N4CEWEN.BIN -> tools/bin/"
+
 echo ""
 echo "Built files in tools/bin/:"
 ls -lh "$BIN_DIR/"
