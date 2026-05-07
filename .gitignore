@@ -12,3 +12,6 @@ bin/
 # Backup files
 *.bak
 *.old
+
+# Claude Stuff
+# CLAUDE.md
