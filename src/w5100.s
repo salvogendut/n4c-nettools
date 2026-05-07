@@ -602,11 +602,28 @@ SOCKET:
     ; Socket 0 is reserved for TCP (telnet)
     ld a, 1
 
-    ; First, ensure socket is closed (in case left open from previous run)
+    ; Ensure socket is closed: issue CLOSE, wait for command, then wait for
+    ; S1_SR to actually reach SSTAT_CLOSED (0x00), then clear S1_IR so no
+    ; stale interrupt bits from a previous session confuse the new open.
     ld hl, S1_CR
     ld a, SCMD_CLOSE
     call W5100_WRITE_REG
     call WAIT_CMD_DONE_S1
+
+    ld bc, 2000
+.wait_s1_closed:
+    ld hl, S1_SR
+    call W5100_READ_REG
+    or a
+    jr z, .s1_is_closed
+    dec bc
+    ld a, b
+    or c
+    jr nz, .wait_s1_closed
+.s1_is_closed:
+    ld hl, S1_IR
+    ld a, 0xFF
+    call W5100_WRITE_REG
 
     ; Set socket mode
     ld hl, S1_MR
@@ -689,6 +706,9 @@ CLOSE:
     ld a, SCMD_CLOSE
     call W5100_WRITE_REG
     call WAIT_CMD_DONE_S1
+    ld hl, S1_IR
+    ld a, 0xFF
+    call W5100_WRITE_REG
     jr .close_exit
 
 .close_s0:
@@ -843,10 +863,11 @@ SENDTO:
     pop bc
     ld hl, S1_TX_WR0
     call W5100_READ_REG
-    ld h, a
+    ld d, a              ; D = MSB (ld h,a would be overwritten by next ld hl)
     ld hl, S1_TX_WR0 + 1
     call W5100_READ_REG
-    ld l, a
+    ld e, a              ; E = LSB
+    ex de, hl            ; HL = current TX write pointer
     add hl, bc
 
     push hl
@@ -979,8 +1000,8 @@ N_TIME:
     push bc
     push de
 
-    ; Read CPC frame counter (0xAC7E, 16-bit, 50Hz)
-    ld hl, (0xAC7E)
+    ; Read CPC frame counter (0xB5CB, 16-bit, 50Hz, standard firmware ISR)
+    ld hl, (0xB5CB)
 
     ; Convert from 1/50 sec to milliseconds
     ; HL = HL * 20 (since 1000ms/50 = 20ms per frame)
@@ -1051,37 +1072,26 @@ N_RIPA:
 ;-------------------------------------------------------
 ; N_DPRT - Get dynamic port number (KCNet API)
 ; Entry: None
-; Exit:  HL = port number (network order, 49152-65535)
+; Exit:  HL = port number, H = MSB, L = LSB (for SOCKET to write directly)
+; Uses a RAM counter to give each session a distinct source port.
+; Cycles 0xC001-0xC0FF (49153-49407), wrapping at 0x00 back to 0xC001.
 ;-------------------------------------------------------
 N_DPRT:
     push af
     push bc
+    push de
 
-    ; Read stored port from 0x0036
-    ld hl, 0x0036
-    call W5100_READ_REG
-    or 0xC0         ; Make >= 49152
-    ld h, a
-    inc hl
-    call W5100_READ_REG
-    ld l, a
-    inc hl
+    ld hl, dprt_seq
+    ld a, (hl)
+    inc a
+    jr nz, .dprt_nowrap
+    inc a               ; skip 0x00 to keep port visibly non-zero
+.dprt_nowrap:
+    ld (hl), a
+    ld l, a             ; L = LSB (counter byte)
+    ld h, 0xC0          ; H = MSB (0xC0 keeps port >= 49152)
 
-    ; Store back
-    push hl
-    ld hl, 0x0036
     pop de
-    ld a, d
-    call W5100_WRITE_REG
-    inc hl
-    ld a, e
-    call W5100_WRITE_REG
-
-    ; Return in network order (swap bytes)
-    ld a, d
-    ld h, e
-    ld l, a
-
     pop bc
     pop af
     ret
@@ -1318,3 +1328,4 @@ WAIT_CMD_DONE_S1:
 ; SENDTO variables
 ;-------------------------------------------------------
 sendto_peer_ptr:    dw 0        ; Saved peer data pointer
+dprt_seq:           db 0        ; N_DPRT source port counter (cycles 0x01-0xFF)
