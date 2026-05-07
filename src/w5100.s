@@ -560,7 +560,6 @@ WAIT_CMD_DONE:
 ;-------------------------------------------------------
 CHECK_CONNECTION:
     push hl
-    push af
 
     ld hl, S0_SR
     call W5100_READ_REG
@@ -579,7 +578,6 @@ CHECK_CONNECTION:
     or a
 
 .check_exit:
-    pop af
     pop hl
     ret
 
