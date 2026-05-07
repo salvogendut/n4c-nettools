@@ -472,13 +472,35 @@ dns_parse_response:
     add hl, bc
 
     ; Now at answer section
-    ; Skip answer NAME (compression pointer most likely)
+    ; Skip answer NAME: may be a compression pointer (0xC0 xx)
+    ; or a full uncompressed name (sequence of length-prefixed labels + 0x00)
     ld a, (hl)
     and 0xC0
     cp 0xC0
-    jr nz, .error_name_not_ptr  ; Should be pointer
+    jr z, .ans_ptr              ; compression pointer: skip 2 bytes
+.ans_skip_label_loop:
+    ld a, (hl)
     inc hl
-    inc hl                      ; Skip 2-byte pointer
+    or a
+    jr z, .ans_name_done        ; 0x00 terminator: name complete
+    and 0xC0
+    cp 0xC0
+    jr z, .ans_ptr_tail         ; pointer embedded at end of name
+    dec hl
+    ld a, (hl)                  ; re-read original length byte
+    inc hl
+    ld b, a
+.ans_skip_chars:
+    inc hl
+    djnz .ans_skip_chars
+    jr .ans_skip_label_loop
+.ans_ptr_tail:
+    inc hl                      ; skip second byte of the pointer
+    jr .ans_name_done
+.ans_ptr:
+    inc hl
+    inc hl
+.ans_name_done:
 
     ; Check TYPE (should be A = 1)
     ld a, (hl)
