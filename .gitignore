@@ -3,9 +3,10 @@
 *.bin
 bin/
 
-# Committed release binaries (override the *.BIN rule above)
-!tools/built/*.BIN
-!tools/built/*.BAS
+# Committed release binaries in tools/bin/ (override the *.BIN / bin/ rules above)
+!tools/bin/
+!tools/bin/*.BIN
+!tools/bin/*.BAS
 
 # Editor/IDE files
 *.swp

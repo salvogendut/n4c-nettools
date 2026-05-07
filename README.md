@@ -1,340 +1,219 @@
-# N4C-NETTOOLS - Network Programming Library for Net4CPC
+# N4C-NETTOOLS — Network Library and Tools for Net4CPC
 
-A collection of network utilities and libraries for the Amstrad CPC with Net4CPC (W5100S Ethernet) hardware.
+Z80 assembly network library and ready-to-run tools for the Amstrad CPC with [Net4CPC](https://net4cpc.eu) (W5100S Ethernet) hardware.
 
-## Overview
+## What's in the box
 
-This library provides a complete Z80 assembly network stack for developing network applications on the Amstrad CPC with Net4CPC hardware. It includes low-level W5100S driver functions, DNS resolution, and example programs.
+| Item | Status | Description |
+|------|--------|-------------|
+| `src/w5100.s` | Library | W5100S chip driver — sockets, TCP, UDP, buffers |
+| `src/dns_simple.s` | Library | DNS resolver (RFC 1034 A-record lookups) |
+| `src/n4c-netinit-kv.s` | Library | Reads `N4C.CFG`, configures W5100S — preferred initializer |
+| `src/n4c-netinit.s` | Library | Simpler alternative initializer (no file parsing) |
+| `src/ntp/ntp.s` | Tool | SNTPv4 time client — displays UTC date/time |
+| `src/wget/wget.s` | Tool | HTTP file downloader — fetches files over the network |
 
-**Usage Model:** This is a reference library. Applications copy the files they need (w5100.s, dns_simple.s) into their own source directories to remain self-contained. Each application is independent and includes its own copy of the networking code.
+## Quick start — running the tools
 
-## Hardware Requirements
+Pre-built binaries are in `tools/bin/`. Copy to your CPC disk:
 
-- **Amstrad CPC** (464/664/6128)
-- **Net4CPC** - W5100S Ethernet interface
-- **I/O Ports:** 0xFD20-0xFD23 (W5100S access)
+```
+NTP.BIN   NTP.BAS   WGET.BIN   WGET.BAS   N4C.CFG
+```
 
-## Library Components
+Also copy your `N4C.CFG` (see [Configuration](#configuration) below).
 
-### Core Library (`src/`)
+**NTP** — display current UTC time:
+```basic
+RUN"NTP
+```
 
-#### n4c-netinit-kv.s - Network Configuration Reader
-File-based network configuration system using key=value format.
+**WGET** — download a file from a web server:
+```basic
+RUN"WGET
+```
+The BASIC loader prompts for a URL and saves the file to disk.
 
-**Configuration File:** `N4C.CFG` (must be on same disk as application)
+## Building from source
 
-**Format:**
+Requires [RASM](https://github.com/EdouardBERGE/rasm) assembler.
+
+```bash
+./build.sh
+```
+
+Output goes to `tools/bin/`. The script temporarily copies library files alongside each tool's source, assembles, then cleans up.
+
+To use a specific RASM binary:
+```bash
+RASM=/path/to/rasm ./build.sh
+```
+
+## Project layout
+
+```
+src/
+  w5100.s               W5100S driver (library)
+  dns_simple.s          DNS resolver (library)
+  n4c-netinit-kv.s      N4C.CFG reader + W5100S init (library)
+  n4c-netinit.s         Simple initializer (library)
+  ntp/
+    ntp.s               NTP tool source
+    NTP.BAS             BASIC loader for NTP
+  wget/
+    wget.s              WGET tool source
+    WGET.BAS            BASIC loader for WGET
+tools/
+  bin/                  Built binaries (committed — copy to CPC disk)
+    NTP.BIN  NTP.BAS
+    WGET.BIN WGET.BAS
+build.sh                Builds all tools → tools/bin/
+examples/
+  dnstest.s             Library usage example (DNS resolution)
+docs/
+  BUGS_FIXED.md         Catalogue of bugs found and fixed
+  CONFIG.md             N4C.CFG format reference
+  N4C-NETINIT.md        Initializer function reference
+  PROJECT_STRUCTURE.md  Library design rationale
+N4C.CFG.example         Example network configuration
+```
+
+## Configuration
+
+Create `N4C.CFG` on your CPC disk (CR+LF line endings required):
+
 ```
 IP=192.168.1.100
 MASK=255.255.255.0
 GW=192.168.1.1
-DNS=192.168.1.1
+DNS=8.8.8.8
 ```
 
-**Main Function:**
-- `N4C_INIT` - Read N4C.CFG and initialize W5100S
-  - Exit: Carry clear if OK, set on error
-  - Initializes W5100S with settings from config file
-  - Silent operation (no screen output)
+See `docs/CONFIG.md` for full details.
 
-**Features:**
-- Key=value parser (keys: IP, MASK, GW, DNS)
-- CAS_IN_DIRECT file reading (handles all file sizes correctly)
-- Automatic W5100S initialization
-- Error handling for missing files
+## Library reference
 
-**Usage in your application:**
+### `w5100.s` — W5100S driver
+
+Provides socket-based networking on top of the W5100S chip.
+
+**Socket lifecycle:**
+- `SOCKET` — open socket (A=0xFF auto, D=SK_STREAM/SK_DGRAM, E=flags) → A=socket#
+- `CONNECT` — TCP connect (HL=IP, BC=port)
+- `CLOSE` — close socket (A=socket#)
+
+**TCP data transfer:**
+- `NET_SEND` — send buffer (HL=buf, BC=len)
+- `NET_RECV` — receive 1 byte (HL=buf) → BC=1 if data, 0 if empty
+- `CHECK_CONNECTION` — carry clear if connected, set if disconnected
+
+**UDP data transfer:**
+- `SENDTO` — send datagram (A=socket, HL=buf, BC=len, DE=peer: 4-byte IP + 2-byte port)
+- `SELECT` — check RX data (A=socket, E=SL_RECV) → carry clear if data available
+
+**Low-level access:**
+- `W5100_READ_REG` / `W5100_WRITE_REG` — single register (HL=addr)
+- `W5100_READ_BUF` / `W5100_WRITE_BUF` — block transfer (HL=host buf, DE=W5100S addr, BC=len)
+
+**Utilities:**
+- `N_DPRT` — get dynamic source port → HL (cycles 0xC001–0xC0FF)
+- `N_TIME` — read CPC frame counter → HL (1/50 s units)
+
+**Socket modes:** `SK_STREAM` (1=TCP), `SK_DGRAM` (2=UDP)  
+**Hardware I/O:** 0xFD20–0xFD23  
+**Socket registers:** Socket 0 base 0x0400, Socket 1 base 0x0500 (stride 0x0100)  
+**TX/RX buffers:** 2 KB each; Socket 0 TX 0x4000, RX 0x6000; Socket 1 TX 0x4800, RX 0x6800
+
+### `dns_simple.s` — DNS resolver
+
+```z80
+    ld  hl, hostname    ; null-terminated string
+    ld  de, ip_buffer   ; 4-byte result
+    call RESOLVE_HOSTNAME
+    jr  c, dns_error    ; A = error code on failure
+```
+
+Error codes: 16 socket, 18 build, 19 send, 20 timeout, 21–27 parse errors.  
+Timeout: 3000 ms. Uses Socket 1 (UDP).
+
+### `n4c-netinit-kv.s` — network initializer
+
 ```z80
     call N4C_INIT
-    jr c, config_error
-    ; Network is ready
+    jr  c, init_error   ; carry set = N4C.CFG missing or bad
+    ; W5100S is now configured and ready
 ```
 
-#### w5100.s - W5100S Hardware Interface Layer
-Complete driver for W5100S Ethernet chip with socket-based networking.
+Reads `N4C.CFG` (keys: IP, MASK, GW, DNS) via `CAS_IN_DIRECT` and writes all addresses into W5100S registers.
 
-**Functions:**
-- `SOCKET` - Open TCP or UDP socket
-- `CONNECT` - Connect TCP socket to remote host
-- `CLOSE` - Close socket
-- `SENDTO` - Send UDP datagram
-- `SELECT` - Check socket status (readable/writable)
-- `NET_SEND` - Send TCP data
-- `NET_RECV` - Receive TCP data
-- `CHECK_CONNECTION` - Verify TCP connection status
-- `W5100_READ_REG` / `W5100_WRITE_REG` - Register access
-- `W5100_READ_BUF` / `W5100_WRITE_BUF` - Buffer access
-- `N_TIME` - Get timer value
-- `N_DPRT` - Get dynamic port number
-- `N_RIPA` - Read IP address from W5100S
+## Using the library in your own project
 
-**Socket Types:**
-- `SK_STREAM` (1) - TCP socket
-- `SK_DGRAM` (2) - UDP socket
+Copy the files you need to your project's source directory:
 
-**Select Types:**
-- `SL_RECV` (1) - Check for received data
-- `SL_SEND` (2) - Check if can send data
-
-#### dns_simple.s - DNS Resolver
-Simple DNS client implementing RFC 1034 for hostname resolution.
-
-**Main Function:**
-- `RESOLVE_HOSTNAME` - Resolve hostname to IP address
-  - Entry: HL = hostname string (null-terminated)
-  - Entry: DE = result buffer (4 bytes for IP)
-  - Exit: Carry clear if OK, set on error
-  - Exit: A = error code if carry set
-
-**Error Codes:**
-- 16 - SOCKET failed
-- 18 - DNS query build failed
-- 19 - SENDTO failed
-- 20 - Timeout waiting for response
-- 21 - Response has QR bit clear (not a response)
-- 22 - DNS server returned error
-- 23-27 - Parse errors
-
-**Configuration:**
-- DNS server IP must be configured in W5100S registers (via EWEN.BAS or setup code)
-- Default timeout: 3000ms
-
-## Examples
-
-### DNS Test Program (`examples/dnstest.s`)
-
-Standalone program to test DNS resolution. Resolves "google.com" and displays the IP address.
-
-**Build:**
 ```bash
-cd examples
-./build_dnstest.sh
+cp n4c-nettools/src/w5100.s         your-project/
+cp n4c-nettools/src/dns_simple.s    your-project/   # if you need DNS
+cp n4c-nettools/src/n4c-netinit-kv.s your-project/  # recommended init
 ```
 
-**Run on CPC:**
-```basic
-LOAD"DNS.BAS"
-RUN
-```
+Then include them at the bottom of your main assembly file:
 
-**Expected output:**
-```
-DNS Test Program
-================
-Resolving: google.com
-DNS Server: 192.168.68.54
-Success! IP: 198.178.203.100
-```
-
-## Using in Your Projects
-
-### 1. Copy the Library Files
-
-Copy the library files you need to your project's source directory:
-```bash
-cp n4c-nettools/src/w5100.s your-project/src/
-cp n4c-nettools/src/dns_simple.s your-project/src/  # If you need DNS
-```
-
-Then in your main assembly file:
 ```z80
+    include "n4c-netinit-kv.s"
     include "w5100.s"
     include "dns_simple.s"
 ```
 
-**Important:** Each application should have its own copy of these files. This keeps your project self-contained and buildable without external dependencies.
+Each application keeps its own copy — no shared build output, no external dependency at assemble time.
 
-### 2. Initialize Network Configuration
+## AMSDOS firmware vectors (USB/FAT drive)
 
-**Option A: Use n4c-netinit-kv.s (Recommended)**
+This library is tested on a CPC running from a USB drive with FAT firmware. That firmware inserts one extra CAS INPUT entry, shifting CAS IN routines +3 bytes from the standard ROM addresses. CAS OUT routines are at standard addresses.
 
-Create `N4C.CFG` on your disk:
-```
-IP=192.168.1.100
-MASK=255.255.255.0
-GW=192.168.1.1
-DNS=192.168.1.1
-```
+| Routine | Standard | USB drive |
+|---------|----------|-----------|
+| CAS_IN_OPEN | &BC74 | &BC77 |
+| CAS_IN_DIRECT | &BC80 | &BC83 |
+| CAS_OUT_OPEN | &BC8C | &BC8C |
+| CAS_OUT_CLOSE | &BC8F | &BC8F |
+| CAS_OUT_CHAR | &BC95 | &BC95 |
 
-Then in your code:
-```z80
-    include "n4c-netinit-kv.s"
-    
-    call N4C_INIT
-    jr c, config_error
-    ; Network is ready, W5100S initialized
-```
+All CAS routines: carry SET = success, carry CLEAR = failure.
 
-**Option B: Manual Initialization**
+## Notable bugs found and fixed
 
-Set the mode register and configure manually:
-```z80
-    ld bc, 0xFD20
-    ld a, 3                     ; Auto-increment + indirect bus mode
-    out (c), a
-    
-    ; Then configure IP, gateway, DNS via W5100_WRITE_REG
-```
+### `w5100.s` — SENDTO TX write pointer corruption
+`ld h, a` saved the TX_WR MSB, then `ld hl, S1_TX_WR0+1` immediately overwrote H with 0x05 (the high byte of the register address). On a fresh socket where TX_WR = 0x0000, this caused SENDTO to tell the W5100S to transmit 1328 bytes instead of the true payload length. DNS servers silently ignore trailing garbage; NTP servers discard packets that aren't exactly 48 bytes. Fixed by saving MSB in D, LSB in E, then `ex de, hl` before `add hl, bc`.
 
-### 3. Example: TCP Connection
+### `dns_simple.s` — answer NAME only handled compressed pointers
+`dns_parse_response` returned error 23 for any DNS answer whose NAME field was not a compression pointer (0xC0 xx). Home router DNS caches return uncompressed label sequences on repeat queries, causing reliable DNS failure on the second and subsequent runs. Fixed by adding a label-skip loop (mirrors the QNAME skip in the question section) with fallthrough to pointer handling.
 
-```z80
-    ; Resolve hostname
-    ld hl, hostname             ; "example.com"
-    ld de, ip_buffer
-    call RESOLVE_HOSTNAME
-    jp c, error_dns
+### `w5100.s` — N_DPRT always returned the same source port
+N_DPRT was supposed to read the W5100S source port register to generate a dynamic port, but the address calculation corrupted the register address, always reading 0xC037 (undefined). Fixed by replacing the register-read approach with an in-RAM counter (`dprt_seq`) cycling 0x01–0xFF, giving ports 0xC001–0xC0FF.
 
-    ; Create TCP socket
-    ld a, 0                     ; Socket 0
-    ld d, SK_STREAM             ; TCP
-    ld e, 0
-    call SOCKET
-    jp c, error_socket
+### `w5100.s` — CHECK_CONNECTION always returned caller's carry
+`push af / scf / or a / pop af` sequence restored the caller's carry flag through the final `pop af`, making CHECK_CONNECTION always report the previous carry state. Fixed by removing the push/pop wrapper.
 
-    ; Connect to server
-    ld hl, ip_buffer
-    ld bc, 80                   ; Port 80
-    call CONNECT
-    jp c, error_connect
+Full bug catalogue: `docs/BUGS_FIXED.md`
 
-    ; Send HTTP request
-    ld hl, http_request
-    ld bc, request_len
-    call NET_SEND
+## Examples
 
-    ; Receive response
-    ld hl, response_buffer
-    ld bc, 2048
-    call NET_RECV
+`examples/dnstest.s` — standalone DNS resolution test. Resolves `google.com` and prints the IP.
 
-    ; Close connection
-    call CLOSE
-
-hostname:       db "example.com",0
-ip_buffer:      ds 4
-http_request:   db "GET / HTTP/1.0",13,10,13,10
-request_len:    equ $-http_request
-response_buffer: ds 2048
+```bash
+cd examples && ./build_dnstest.sh
 ```
 
-### 4. Example: UDP Datagram
+## Applications using this library
 
-```z80
-    ; Create UDP socket
-    ld a, 0xFF                  ; Auto-allocate socket
-    ld d, SK_DGRAM              ; UDP
-    ld e, 0
-    call SOCKET
-    jp c, error_socket
-    ld (my_socket), a
-
-    ; Build peer data (IP + port)
-    ld hl, peer_data
-    ld de, target_ip
-    ld bc, 4
-    ldir                        ; Copy IP
-    ld (hl), 0                  ; Port MSB
-    inc hl
-    ld (hl), 53                 ; Port LSB (DNS = 53)
-
-    ; Send datagram
-    ld a, (my_socket)
-    ld hl, udp_data
-    ld bc, data_len
-    ld de, peer_data
-    call SENDTO
-    jp c, error_send
-
-    ; Close socket
-    ld a, (my_socket)
-    call CLOSE
-
-my_socket:      db 0
-peer_data:      ds 8            ; 4 IP + 2 port + 2 size
-target_ip:      db 8,8,8,8      ; 8.8.8.8
-udp_data:       db "Hello, UDP!"
-data_len:       equ $-udp_data
-```
-
-## W5100S Register Map
-
-### Common Registers
-- `0x0000` - Mode Register (MR) - set to 3 for indirect bus + auto-increment
-- `0x0001` - Gateway Address (GAR0-3)
-- `0x0005` - Subnet Mask (SUBR0-3)
-- `0x0009` - Source Hardware Address (SHAR0-5)
-- `0x000F` - Source IP Address (SIPR0-3)
-- `0x0032` - DNS Server IP (4 bytes)
-
-### Socket Registers (Socket 0: base 0x0400, Socket 1: base 0x0500, etc.)
-- `+0x00` - Mode (Sn_MR)
-- `+0x01` - Command (Sn_CR)
-- `+0x02` - Interrupt (Sn_IR)
-- `+0x03` - Status (Sn_SR)
-- `+0x04` - Source Port (Sn_PORT0-1)
-- `+0x0C` - Destination IP (Sn_DIPR0-3)
-- `+0x10` - Destination Port (Sn_DPORT0-1)
-- `+0x20` - TX Free Size (Sn_TX_FSR0-1)
-- `+0x24` - TX Write Pointer (Sn_TX_WR0-1)
-- `+0x26` - RX Received Size (Sn_RX_RSR0-1)
-- `+0x28` - RX Read Pointer (Sn_RX_RD0-1)
-
-### Memory Buffers
-- `0x4000-0x5FFF` - Socket TX buffers (2KB each)
-- `0x6000-0x7FFF` - Socket RX buffers (2KB each)
-
-## Applications Using This Library
-
-- **n4cewenterm** - ANSI Telnet client with DNS support
-
-## Future Additions
-
-Planned utilities:
-- FTP client
-- Ping utility
-- Simple HTTP client
-- NTP time sync
-
-## Technical Notes
-
-### Known Issues and Bugs Fixed
-
-1. **SENDTO destination registers** - Use byte-by-byte writes with W5100_WRITE_REG, not W5100_WRITE_BUF
-2. **DNS name encoding** - Must save label counter to A before `pop bc` to avoid register overwrite
-3. **Result buffer pointers** - Save DE before function calls that destroy it
-4. **RX buffer reading** - Direct buffer access works better than complex RECVFR implementations
-
-### Common Bug Patterns to Avoid
-
-```z80
-; WRONG - second LD overwrites H
-ld h, a
-ld hl, 0x1234
-
-; RIGHT - use separate instructions or BC register
-ld h, a
-ld l, low_byte
-ld h, high_byte
-
-; WRONG - pop overwrites B before reading it
-ld a, b                 ; B has important value
-pop bc                  ; Now B is destroyed!
-ld (dest), a           ; Wrong value
-
-; RIGHT - save before pop
-ld a, b                 ; Save B to A FIRST
-pop bc                  ; Now safe to pop
-ld (dest), a           ; Correct value
-```
+- **n4cewenterm** — ANSI Telnet client for the Amstrad CPC
 
 ## Credits
 
 - Based on KCNet DNS client by susowa (2008)
 - Adapted for Net4CPC W5100S hardware (2026)
-- Integrated into n4cewenterm project
-- Debugging and bug fixes: Claude & User collaboration (2026-05-04/05)
+- Bugs found and fixed through hardware testing on a real CPC 6128
 
 ## License
 
-Open source - use freely in your own Amstrad CPC network projects.
+Open source — use freely in your own Amstrad CPC network projects.
