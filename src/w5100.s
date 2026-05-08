@@ -419,12 +419,13 @@ NET_SEND:
 ; Entry: HL = buffer address
 ;        BC = max length
 ; Exit:  BC = actual bytes received
-;        Carry clear if OK, set if error
+;        Carry clear if OK
+; Reads up to BC bytes in a single batch; issues SCMD_RECV
+; only once at the end to minimise W5100S I/O overhead.
 ;-------------------------------------------------------
 NET_RECV:
-    push hl             ; Save buffer pointer
-    push de
-    push bc             ; Save requested length
+    push hl             ; [A] save buffer pointer
+    push bc             ; [B] save requested max
 
     ; Check how much data is actually available
     ld hl, S0_RX_RSR0
@@ -434,49 +435,74 @@ NET_RECV:
     call W5100_READ_REG
     ld e, a             ; DE = bytes available
 
-    ; If no data, return immediately
     ld a, d
     or e
     jr z, .recv_no_data
 
-    ; For now, just read one byte at a time
+    ; actual = min(requested, available)
+    pop bc              ; [B] BC = requested
+    ld a, b
+    cp d
+    jr c, .bc_is_min    ; B < D → BC < DE
+    jr nz, .de_is_min   ; B > D → DE < BC
+    ld a, c
+    cp e
+    jr c, .bc_is_min    ; B==D, C < E → BC < DE
+.de_is_min:
+    ld b, d
+    ld c, e             ; BC = available (smaller)
+.bc_is_min:
+    ; BC = actual bytes to read
+
+    push bc             ; [B] save actual count
+
     ; Get RX read pointer
     ld hl, S0_RX_RD0
     call W5100_READ_REG
     ld d, a
     ld hl, S0_RX_RD1
     call W5100_READ_REG
-    ld e, a             ; DE = RX read pointer value
+    ld e, a             ; DE = RX read pointer
 
-    ; Mask to get offset within 2KB buffer
+    pop bc              ; [B] BC = actual count
+    pop hl              ; [A] HL = buffer pointer
+
+    push bc             ; [A] save actual count for return value
+
+    ; Read BC bytes from the W5100S RX ring buffer
+.recv_byte_loop:
+    ld a, b
+    or c
+    jr z, .recv_loop_done
+
+    push bc             ; save remaining count
+    push hl             ; save buffer pointer
+    push de             ; save RD pointer
+
+    ; physical = (DE & 0x07FF) + S0_RX_BASE
     ld a, e
     and 0xFF
     ld l, a
     ld a, d
     and 0x07
-    ld h, a             ; HL = masked offset (0-2047)
+    ld h, a
+    ld de, S0_RX_BASE
+    add hl, de          ; HL = physical W5100S address
 
-    ; Add RX buffer base
-    ld de, 0x6000
-    add hl, de          ; HL = W5100S RX buffer address
+    call W5100_READ_REG ; A = data byte (HL unchanged)
 
-    ; Read one byte directly using W5100_READ_REG
-    call W5100_READ_REG
+    pop de              ; restore RD pointer
+    pop hl              ; restore buffer pointer
+    pop bc              ; restore remaining count
 
-    ; Store in our buffer
-    pop bc              ; Get length (discard)
-    pop de              ; Get original DE (discard)
-    pop hl              ; Get buffer pointer
-    ld (hl), a          ; Store the byte we just read
+    ld (hl), a          ; store byte
+    inc hl              ; advance buffer
+    inc de              ; advance RD pointer (natural 16-bit wrap)
+    dec bc
+    jr .recv_byte_loop
 
-    ; Update RX read pointer (increment by 1)
-    ld hl, S0_RX_RD0
-    call W5100_READ_REG
-    ld d, a
-    ld hl, S0_RX_RD1
-    call W5100_READ_REG
-    ld e, a
-    inc de              ; Add 1 byte
+.recv_loop_done:
+    ; Write updated RD pointer back once
     ld hl, S0_RX_RD0
     ld a, d
     call W5100_WRITE_REG
@@ -484,20 +510,19 @@ NET_RECV:
     ld a, e
     call W5100_WRITE_REG
 
-    ; Send RECV command
+    ; Issue RECV command once for the entire batch
     ld hl, S0_CR
     ld a, SCMD_RECV
     call W5100_WRITE_REG
     call WAIT_CMD_DONE
 
-    ld bc, 1            ; Return 1 byte read
-    or a                ; Clear carry
+    pop bc              ; [A] return actual count
+    or a                ; clear carry
     ret
 
 .recv_no_data:
-    pop bc
-    pop de
-    pop hl
+    pop bc              ; [B] discard requested
+    pop hl              ; [A] discard buffer ptr
     ld bc, 0
     or a
     ret
