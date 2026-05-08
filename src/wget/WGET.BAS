@@ -22,6 +22,7 @@
 220 IF slash=0 THEN host$=url$:path$="/":GOTO 260
 230 host$=LEFT$(url$,slash-1)
 240 path$=MID$(url$,slash)
+245 temp$="":FOR i=1 TO LEN(path$):c=ASC(MID$(path$,i,1)):IF c>=97 AND c<=122 THEN c=c-32:temp$=temp$+CHR$(c):NEXT i:path$=temp$
 250 REM
 260 REM Extract port from host (e.g. "host:8080") and filename from path
 261 prt=80

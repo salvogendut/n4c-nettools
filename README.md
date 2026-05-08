@@ -1,6 +1,6 @@
 # N4C-NETTOOLS — Network Library and Tools for Net4CPC
 
-Z80 assembly network library and ready-to-run tools for the Amstrad CPC with [Net4CPC](https://net4cpc.eu) (W5100S Ethernet) hardware.
+Z80 assembly network library and ready-to-run tools for the Amstrad CPC with [Net4CPC](https://github.com/salafek/Net4CPC) (W5100S Ethernet) hardware.
 
 ## What's in the box
 
@@ -84,6 +84,9 @@ tools/
     WGET.BIN   WGET.BAS
     N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
 build.sh                ./build.sh builds all tools → tools/bin/
+utility/
+  create_config.sh      Interactive N4C.CFG generator (CR+LF output)
+  fix_cpc_files.sh      Convert BAS/CFG files to CR+LF for CPC disk
 examples/
   dnstest.s             Library usage example (DNS resolution)
 docs/
@@ -105,7 +108,22 @@ GW=192.168.1.1
 DNS=8.8.8.8
 ```
 
+Use the interactive helper to generate it with correct line endings:
+
+```bash
+./utility/create_config.sh
+```
+
 See `docs/CONFIG.md` for full details.
+
+## Utility scripts
+
+| Script | Purpose |
+|--------|---------|
+| `utility/create_config.sh` | Interactive prompt to create `N4C.CFG` with correct CR+LF line endings |
+| `utility/fix_cpc_files.sh` | Convert all `.BAS` and `.CFG` files in `tools/bin/` to CR+LF for CPC compatibility |
+
+The CPC and AMSDOS require `CR+LF` (`\r\n`) line endings in all text files. Run `fix_cpc_files.sh` after any edit to a BASIC loader or config file to ensure they are CPC-ready before copying to disk.
 
 ## Library reference
 
@@ -226,9 +244,9 @@ cd examples && ./build_dnstest.sh
 
 ## Credits
 
-- Based on KCNet DNS client by susowa (2008)
+- Based on KCNet DNS client by susowa (2008) and salafek (2023)
 - Adapted for Net4CPC W5100S hardware (2026)
-- Bugs found and fixed through hardware testing on a real CPC 6128
+- Bugs found and fixed through hardware testing on a real CPC 464 with 1Mb of RAM , a Net4CPC device and a CPC PicoRom (with USB module)
 
 ## License
 
