@@ -1,6 +1,6 @@
 # N4C-NETTOOLS — Network Library and Tools for Net4CPC
 
-Z80 assembly network library and ready-to-run tools for the Amstrad CPC with [Net4CPC](https://net4cpc.eu) (W5100S Ethernet) hardware.
+Z80 assembly network library and ready-to-run tools for the Amstrad CPC with [Net4CPC](https://github.com/salafek/Net4CPC) (W5100S Ethernet) hardware.
 
 ## What's in the box
 
