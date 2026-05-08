@@ -244,9 +244,9 @@ cd examples && ./build_dnstest.sh
 
 ## Credits
 
-- Based on KCNet DNS client by susowa (2008)
+- Based on KCNet DNS client by susowa (2008) and salafek (2023)
 - Adapted for Net4CPC W5100S hardware (2026)
-- Bugs found and fixed through hardware testing on a real CPC 6128
+- Bugs found and fixed through hardware testing on a real CPC 464 with 1Mb of RAM , a Net4CPC device and a CPC PicoRom (with USB module)
 
 ## License
 
