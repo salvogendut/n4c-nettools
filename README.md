@@ -84,6 +84,9 @@ tools/
     WGET.BIN   WGET.BAS
     N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
 build.sh                ./build.sh builds all tools → tools/bin/
+utility/
+  create_config.sh      Interactive N4C.CFG generator (CR+LF output)
+  fix_cpc_files.sh      Convert BAS/CFG files to CR+LF for CPC disk
 examples/
   dnstest.s             Library usage example (DNS resolution)
 docs/
@@ -105,7 +108,22 @@ GW=192.168.1.1
 DNS=8.8.8.8
 ```
 
+Use the interactive helper to generate it with correct line endings:
+
+```bash
+./utility/create_config.sh
+```
+
 See `docs/CONFIG.md` for full details.
+
+## Utility scripts
+
+| Script | Purpose |
+|--------|---------|
+| `utility/create_config.sh` | Interactive prompt to create `N4C.CFG` with correct CR+LF line endings |
+| `utility/fix_cpc_files.sh` | Convert all `.BAS` and `.CFG` files in `tools/bin/` to CR+LF for CPC compatibility |
+
+The CPC and AMSDOS require `CR+LF` (`\r\n`) line endings in all text files. Run `fix_cpc_files.sh` after any edit to a BASIC loader or config file to ensure they are CPC-ready before copying to disk.
 
 ## Library reference
 
