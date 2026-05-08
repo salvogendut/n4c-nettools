@@ -42,6 +42,7 @@ KM_WAIT_CHAR    equ     0xBB06  ; wait for keypress -> A
 ; inserted before IN section). CAS OUTPUT routines stay at standard addresses.
 ; Confirmed: CAS_IN_OPEN standard &BC74 -> GoTek &BC77 (+3)
 ;            CAS_OUT_OPEN standard &BC8C -> GoTek &BC8C (no shift, confirmed working)
+; CAS_IN_OPEN / CAS_IN_CLOSE defined in n4c-netinit-kv.s (0xBC77 / 0xBC7A)
 CAS_OUT_OPEN    equ     0xBC8C  ; standard address, no shift
 CAS_OUT_CLOSE   equ     0xBC8F  ; standard address, no shift
 CAS_OUT_ABANDON equ     0xBC92  ; standard address - discard output file (no rename from $$)
@@ -204,6 +205,11 @@ send_ok:
         ; ------------------------------------------------------------------
         ; Step 6: Open local output file
         ; ------------------------------------------------------------------
+        ; Overwrite detection is handled in WGET.BAS (before loading this binary).
+        ; CAS_IN_OPEN is NOT called from Z80 because on USB/FAT firmware it
+        ; prints "file not found" to screen and causes side effects that break
+        ; the receive flow. WGET.BAS uses ON ERROR GOTO to check cleanly in BASIC.
+        ;
         ; CAS_OUT_OPEN: B=length of filename, HL=address of filename,
         ;               A=file type (2=binary)
         ; Carry SET = success, Carry CLEAR = failure
@@ -404,6 +410,7 @@ recv_done:
 do_close:
         call    CAS_OUT_CLOSE
         jr      c, close_ok
+        call    CAS_OUT_ABANDON         ; clean up .$$$  so next run isn't blocked
         ld      hl, msg_close_err
         call    PRINT_STR
         jp      wget_close
@@ -418,7 +425,7 @@ close_ok:
         jr      wget_close
 
 file_close_err:
-        call    CAS_OUT_CLOSE   ; best effort
+        call    CAS_OUT_ABANDON ; discard partial download, clean up .$$$
 
 wget_close:
         ; Close TCP socket
@@ -633,13 +640,14 @@ msg_file_err:
 msg_disk_err:
         db      "ERROR: Disk write failed (full?).", 0x0D, 0x0A, 0
 msg_close_err:
-        db      "ERROR: File close failed.", 0x0D, 0x0A, 0
+        db      "ERROR: File close failed.", 0x0D, 0x0A
+        db      "Delete the .BAK file then retry.", 0x0D, 0x0A, 0
 msg_http_err:
         db      "ERROR: HTTP error ", 0
 
 http_get:       db      "GET ", 0
 http_ver:       db      " HTTP/1.0", 0x0D, 0x0A, "Host: ", 0
-http_end:       db      0x0D, 0x0A, 0x0D, 0x0A, 0
+http_end:       db      0x0D, 0x0A, "Connection: close", 0x0D, 0x0A, 0x0D, 0x0A, 0
 
 ; =============================================================================
 ; LIBRARY INCLUDES  (copy these files from n4c-nettools/src/ to your project)
