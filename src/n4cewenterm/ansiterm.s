@@ -375,7 +375,6 @@ ED3	LD	HL,0
 ED_Set_LF
 	XOR	A			; Note simply so that
 	LD	(JSW_LF),A		; ESC[2J works the same as CTRL-L
-	CAll JSW_LF
 	JP	AnsiExit
 
 ;***	Option 0
