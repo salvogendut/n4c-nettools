@@ -14,9 +14,23 @@ Z80 assembly network library and ready-to-run tools for the Amstrad CPC with [Ne
 | `src/wget/` | HTTP file downloader — fetches files from a URL and saves to disk |
 | `src/n4cewenterm/` | ANSI Telnet terminal client — full VT100/ANSI emulation over TCP |
 
+## Hardware targets
+
+Two builds are produced, differing in how network config is read from `N4C.CFG`:
+
+| Target | Hardware | `tools/bin/` folder | Config loading |
+|--------|----------|---------------------|----------------|
+| **Albireo** | Albireo / GoTek with USB/FAT Unidos roms | `tools/bin/albireo/` | Binary reads `N4C.CFG` directly via CAS firmware |
+| **Standard** | ULIfAC, stock CPC AMSDOS | `tools/bin/standard/` | BASIC loader reads `N4C.CFG` via `OPENIN`, POKEs config to RAM before calling binary |
+
+The standard build exists because on ULIfAC (and other setups where the disc ROM patches BASIC commands rather than the CAS firmware vectors), calling `CAS_IN_OPEN` from machine code hits the tape AMSDOS rather than the disc. BASIC's `OPENIN` is intercepted by the disc ROM and works correctly, so the `.BAS` loader handles the file reading instead.
+
 ## Quick start — running the tools
 
-Pre-built binaries are in `tools/bin/`. Copy what you need to your CPC disk along with `N4C.CFG` (see [Configuration](#configuration) below).
+Copy the correct folder's files to your CPC disk along with `N4C.CFG`.
+
+**Albireo / GoTek (USB/FAT Unidos):** use `tools/bin/albireo/`  
+**ULIfAC / stock AMSDOS:** use `tools/bin/standard/`
 
 **NTP** — display current UTC time:
 ```
@@ -51,7 +65,14 @@ Requires [RASM](https://github.com/EdouardBERGE/rasm) assembler.
 ./build.sh
 ```
 
-Output goes to `tools/bin/`. The script temporarily copies library files alongside each tool's source, assembles, then cleans up.
+Both hardware targets are built in one run:
+
+```
+tools/bin/albireo/   NTP.BIN  NTP.BAS  WGET.BIN  WGET.BAS  N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
+tools/bin/standard/  NTP.BIN  NTP.BAS  WGET.BIN  WGET.BAS  N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
+```
+
+CR+LF line endings are applied to all `.BAS` output files automatically.
 
 To use a specific RASM binary:
 ```bash
@@ -68,22 +89,28 @@ src/
   n4c-netinit.s         Simple initializer (library)
   ntp/
     ntp.s               SNTPv4 time client
-    NTP.BAS             BASIC loader
+    NTP.BAS             Albireo BASIC loader (binary reads N4C.CFG)
+    NTP_STD.BAS         Standard BASIC loader (BASIC reads N4C.CFG)
   wget/
     wget.s              HTTP file downloader
-    WGET.BAS            BASIC loader
+    WGET.BAS            Albireo BASIC loader
+    WGET_STD.BAS        Standard BASIC loader
   n4cewenterm/
     termN4C.s           Main entry point
     charset.s           Code page 437 character set (loaded at 0x6800)
     main.s  ansiterm.s  screen.s  telnetfunc_n4c.s
     negotiate.s  urlmenu_n4c.s  data.s
-    N4CEWEN.BAS         BASIC loader
+    N4CEWEN.BAS         Albireo BASIC loader
+    N4CEWEN_STD.BAS     Standard BASIC loader
 tools/
-  bin/                  Built binaries — committed, ready to copy to CPC disk
-    NTP.BIN    NTP.BAS
-    WGET.BIN   WGET.BAS
-    N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
-build.sh                ./build.sh builds all tools → tools/bin/
+  bin/
+    albireo/            Albireo/GoTek build — copy this to USB/FAT disk
+      NTP.BIN  NTP.BAS  WGET.BIN  WGET.BAS
+      N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
+    standard/           Standard AMSDOS build — copy this to ULIfAC disk
+      NTP.BIN  NTP.BAS  WGET.BIN  WGET.BAS
+      N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
+build.sh                Builds all tools for both targets → tools/bin/
 utility/
   create_config.sh      Interactive N4C.CFG generator (CR+LF output)
   fix_cpc_files.sh      Convert BAS/CFG files to CR+LF for CPC disk
@@ -123,7 +150,7 @@ See `docs/CONFIG.md` for full details.
 | `utility/create_config.sh` | Interactive prompt to create `N4C.CFG` with correct CR+LF line endings |
 | `utility/fix_cpc_files.sh` | Convert all `.BAS` and `.CFG` files in `tools/bin/` to CR+LF for CPC compatibility |
 
-The CPC and AMSDOS require `CR+LF` (`\r\n`) line endings in all text files. Run `fix_cpc_files.sh` after any edit to a BASIC loader or config file to ensure they are CPC-ready before copying to disk.
+The CPC and AMSDOS require `CR+LF` (`\r\n`) line endings in all text files. `build.sh` applies this automatically to output `.BAS` files. Run `fix_cpc_files.sh` if you edit a loader or config file manually.
 
 ## Library reference
 
@@ -174,20 +201,51 @@ Timeout: 3000 ms. Uses Socket 1 (UDP).
 
 ```z80
     call N4C_INIT
-    jr  c, init_error   ; carry set = N4C.CFG missing or bad
+    jr  c, init_error   ; carry set = config missing or W5100S not responding
     ; W5100S is now configured and ready
 ```
 
-Reads `N4C.CFG` (keys: IP, MASK, GW, DNS) via `CAS_IN_DIRECT` and writes all addresses into W5100S registers.
+**Albireo build** (`-DAMSDOS_USB=1`): `N4C_INIT` opens `N4C.CFG` via `CAS_IN_DIRECT`, parses the key=value pairs (IP, MASK, GW, DNS), and writes them into the W5100S registers.
+
+**Standard build**: `N4C_INIT` skips file I/O entirely and reads config from fixed RAM addresses `&3F10–&3F1F`, which the BASIC loader has already filled by the time the binary is called. The BASIC loader uses `OPENIN` / `INPUT #9` / `CLOSEIN` to read `N4C.CFG`.
+
+Standard RAM layout (POKEd by BASIC before `CALL`):
+
+| Address | Content |
+|---------|---------|
+| `&3F10–&3F13` | IP address |
+| `&3F14–&3F17` | Netmask |
+| `&3F18–&3F1B` | Gateway |
+| `&3F1C–&3F1F` | DNS server |
+
+## AMSDOS firmware vectors
+
+Two hardware variants are supported. The build flag `-DAMSDOS_USB=1` selects the Albireo/GoTek vector set; the standard build uses stock CPC addresses.
+
+| Routine | Standard CPC (`&`) | USB/FAT Unidos (`&`) |
+|---------|--------------------|----------------------|
+| CAS_IN_OPEN | BC74 | BC77 |
+| CAS_IN_CLOSE | BC77 | BC7A |
+| CAS_IN_CHAR | BC7D | BC80 |
+| CAS_IN_DIRECT | BC80 | BC83 |
+| CAS_OUT_OPEN | BC8C | BC8C |
+| CAS_OUT_CLOSE | BC8F | BC8F |
+| CAS_OUT_CHAR | BC95 | BC95 |
+
+All CAS routines: carry SET = success, carry CLEAR = failure.
+
+The USB/FAT Unidos firmware inserts one extra entry before the standard CAS INPUT section, shifting all CAS IN vectors +3. CAS OUT addresses are identical on both.
+
+On ULIfAC and similar setups, `CAS_IN_OPEN` at &BC74 points to tape AMSDOS, not disc. BASIC's `OPENIN` statement is intercepted at a higher level by the disc ROM and works correctly — hence the two-loader approach.
 
 ## Using the library in your own project
 
 Copy the files you need to your project's source directory:
 
 ```bash
-cp n4c-nettools/src/w5100.s         your-project/
-cp n4c-nettools/src/dns_simple.s    your-project/   # if you need DNS
-cp n4c-nettools/src/n4c-netinit-kv.s your-project/  # recommended init
+cp n4c-nettools/src/w5100.s           your-project/
+cp n4c-nettools/src/dns_simple.s      your-project/   # if you need DNS
+cp n4c-nettools/src/n4c-netinit-kv.s  your-project/   # recommended init
 ```
 
 Then include them at the bottom of your main assembly file:
@@ -198,21 +256,7 @@ Then include them at the bottom of your main assembly file:
     include "dns_simple.s"
 ```
 
-Each application keeps its own copy — no shared build output, no external dependency at assemble time.
-
-## AMSDOS firmware vectors (USB/FAT drive)
-
-This library is tested on a CPC running from a USB drive with FAT firmware. That firmware inserts one extra CAS INPUT entry, shifting CAS IN routines +3 bytes from the standard ROM addresses. CAS OUT routines are at standard addresses.
-
-| Routine | Standard | USB drive |
-|---------|----------|-----------|
-| CAS_IN_OPEN | &BC74 | &BC77 |
-| CAS_IN_DIRECT | &BC80 | &BC83 |
-| CAS_OUT_OPEN | &BC8C | &BC8C |
-| CAS_OUT_CLOSE | &BC8F | &BC8F |
-| CAS_OUT_CHAR | &BC95 | &BC95 |
-
-All CAS routines: carry SET = success, carry CLEAR = failure.
+Build with `-DAMSDOS_USB=1` for Albireo/GoTek; omit the flag for ULIfAC/standard AMSDOS. Each application keeps its own copy — no shared build output, no external dependency at assemble time.
 
 ## Notable bugs found and fixed
 
@@ -246,7 +290,7 @@ cd examples && ./build_dnstest.sh
 
 - Based on KCNet DNS client by susowa (2008) and salafek (2023)
 - Adapted for Net4CPC W5100S hardware (2026)
-- Bugs found and fixed through hardware testing on a real CPC 464 with 1Mb of RAM , a Net4CPC device and a CPC PicoRom (with USB module)
+- Bugs found and fixed through hardware testing on a real CPC 464 with 1Mb of RAM, a Net4CPC device and a CPC PicoRom (with USB module)
 
 ## License
 
