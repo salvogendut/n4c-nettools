@@ -222,9 +222,9 @@ recv_noblock2:
     jp exit_close
 
 .still_ok:
-    ; Receive up to 64 bytes in a single batch (one SCMD_RECV for all)
+    ; Receive up to 255 bytes in a single batch (one SCMD_RECV for all)
     ld hl, recv_batch
-    ld bc, 64
+    ld bc, 255
     call NET_RECV       ; BC = actual bytes received
 
     ld a, b
@@ -241,50 +241,48 @@ recv_noblock2:
     or e
     jp z, recv_done
 
-    ld a, (hl)
-    ld (recvbuf), a     ; stage byte for state machine
+    ld c, (hl)          ; C = current byte
+    inc hl              ; advance batch pointer now (before push)
+    dec de              ; decrement remaining count
 
-    push hl             ; save batch pointer
-    push de             ; save batch count
-
-    ; Telnet IAC state machine
-    ld hl, telnet_iac_state
-    ld b, (hl)          ; B = state (0=normal, 1=got IAC, 2=got IAC+cmd)
-
-    ld a, b
+    ; Check IAC state: 0=normal, 1=got IAC, 2=got IAC+cmd
+    ld a, (telnet_iac_state)
     or a
-    jr nz, .iac_12
+    jr nz, .handle_iac  ; rare: inside an IAC sequence
 
-    ; State 0: normal data
-    ld a, (recvbuf)
+    ; State 0: normal data — check for IAC byte (0xFF)
+    ld a, c
     cp CMD
-    jr nz, .norm_char
+    jr z, .got_iac      ; rare
 
-    ld (hl), 1          ; got IAC, enter state 1
-    jr .sm_done
+    ; Normal character — call ToScreen directly (saves ~125 T vs PrintChar).
+    ; ToScreen/ScreenWrite handle all control chars; both preserve all registers.
+    call ToScreen       ; A = character (set by ld a, c above, unchanged by cp/jr)
+    jp .batch_loop
 
-.norm_char:
-    ld b, a
-    call printchar
-    jr .sm_done
+.got_iac:
+    ld a, 1
+    ld (telnet_iac_state), a
+    jp .batch_loop
 
-.iac_12:
-    ld a, b
+.handle_iac:
     cp 1
     jr nz, .iac_2
 
     ; State 1: save command byte, enter state 2
-    ld a, (recvbuf)
+    ld a, c
     ld (telnet_iac_cmd), a
-    ld (hl), 2
-    jr .sm_done
+    ld a, 2
+    ld (telnet_iac_state), a
+    jp .batch_loop
 
 .iac_2:
-    ; State 2: option byte — build response
+    ; State 2: option byte — save batch state, build and send response
+    push hl             ; save batch pointer
+    push de             ; save batch count
+
     ld a, (telnet_iac_cmd)
-    ld b, a             ; B = cmd
-    ld a, (recvbuf)
-    ld c, a             ; C = option
+    ld b, a             ; B = cmd, C = option (already set)
 
     ld a, c
     cp 1                ; ECHO option?
@@ -352,11 +350,8 @@ recv_noblock2:
     ld hl, telnet_iac_state
     ld (hl), 0
 
-.sm_done:
     pop de              ; restore batch count
     pop hl              ; restore batch pointer
-    inc hl              ; advance to next byte
-    dec de              ; one fewer byte remaining
     jp .batch_loop
 
 recv_done:
@@ -603,7 +598,7 @@ ip_addr:        db 127,0,0,1    ; Default localhost (for testing)
 port:           dw 23           ; Port 23 (default telnet port)
 sendtext:       ds 255
 recvbuf:        ds 2048
-recv_batch:     ds 64           ; batch receive buffer (64 bytes per mainloop tick)
+recv_batch:     ds 255          ; batch receive buffer (255 bytes per mainloop tick)
 
 ; Telnet state machine for IAC sequence handling
 ; 0 = normal data, 1 = got IAC (0xFF), 2 = got IAC+command

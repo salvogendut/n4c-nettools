@@ -420,12 +420,14 @@ NET_SEND:
 ;        BC = max length
 ; Exit:  BC = actual bytes received
 ;        Carry clear if OK
-; Reads up to BC bytes in a single batch; issues SCMD_RECV
-; only once at the end to minimise W5100S I/O overhead.
+; Uses W5100S AI mode (W5100_READ_BUF) for fast bulk reads.
+; Handles ring buffer wrap with at most 2 W5100_READ_BUF calls.
 ;-------------------------------------------------------
 NET_RECV:
-    push hl             ; [A] save buffer pointer
-    push bc             ; [B] save requested max
+    push ix             ; preserve IX
+    push hl
+    pop ix              ; IX = host buffer pointer (PUSH HL / POP IX copies HL → IX)
+    push bc             ; [1] save requested max
 
     ; Check how much data is actually available
     ld hl, S0_RX_RSR0
@@ -437,72 +439,108 @@ NET_RECV:
 
     ld a, d
     or e
-    jr z, .recv_no_data
+    jp z, .recv_no_data
 
     ; actual = min(requested, available)
-    pop bc              ; [B] BC = requested
+    pop bc              ; [1] BC = requested
     ld a, b
     cp d
-    jr c, .bc_is_min    ; B < D → BC < DE
-    jr nz, .de_is_min   ; B > D → DE < BC
+    jr c, .bc_is_min
+    jr nz, .de_is_min
     ld a, c
     cp e
-    jr c, .bc_is_min    ; B==D, C < E → BC < DE
+    jr c, .bc_is_min
 .de_is_min:
     ld b, d
-    ld c, e             ; BC = available (smaller)
+    ld c, e
 .bc_is_min:
     ; BC = actual bytes to read
 
-    push bc             ; [B] save actual count
+    push bc             ; [1] save actual count (return value)
 
-    ; Get RX read pointer
+    ; Read RX read pointer
     ld hl, S0_RX_RD0
     call W5100_READ_REG
     ld d, a
     ld hl, S0_RX_RD1
     call W5100_READ_REG
-    ld e, a             ; DE = RX read pointer
+    ld e, a             ; DE = current RD pointer (free-running 16-bit)
 
-    pop bc              ; [B] BC = actual count
-    pop hl              ; [A] HL = buffer pointer
+    ; Compute new_RD = old_RD + actual_count and save for later
+    ld h, d
+    ld l, e
+    add hl, bc          ; HL = new_RD (BC = actual count, preserved by READ_REG)
+    ld (recv_new_rd), hl
 
-    push bc             ; [A] save actual count for return value
-
-    ; Read BC bytes from the W5100S RX ring buffer
-.recv_byte_loop:
-    ld a, b
-    or c
-    jr z, .recv_loop_done
-
-    push bc             ; save remaining count
-    push hl             ; save buffer pointer
-    push de             ; save RD pointer
-
-    ; physical = (DE & 0x07FF) + S0_RX_BASE
+    ; Compute phys_start = (old_RD & 0x07FF) + S0_RX_BASE (0x6000)
     ld a, e
-    and 0xFF
     ld l, a
     ld a, d
     and 0x07
-    ld h, a
-    ld de, S0_RX_BASE
-    add hl, de          ; HL = physical W5100S address
+    or 0x60
+    ld h, a             ; HL = phys_start in W5100S address space
 
-    call W5100_READ_REG ; A = data byte (HL unchanged)
+    ; Check whether read wraps past end of ring buffer (0x6800)
+    push hl             ; [2] save phys_start
+    add hl, bc          ; HL = phys_end = phys_start + actual_count
+    pop de              ; [2] DE = phys_start
 
-    pop de              ; restore RD pointer
-    pop hl              ; restore buffer pointer
-    pop bc              ; restore remaining count
+    ; Wrap if phys_end > 0x6800 (i.e. last byte would be past 0x67FF)
+    ld a, h
+    cp 0x69
+    jr nc, .do_wrap     ; H >= 0x69: definitely wraps
+    cp 0x68
+    jr c, .no_wrap      ; H <  0x68: no wrap
+    ld a, l
+    or a
+    jr nz, .do_wrap     ; H==0x68, L>0: wraps (phys_end > 0x6800)
 
-    ld (hl), a          ; store byte
-    inc hl              ; advance buffer
-    inc de              ; advance RD pointer (natural 16-bit wrap)
-    dec bc
-    jr .recv_byte_loop
+.no_wrap:
+    ; Single contiguous read: (host_buf, phys_start=DE, actual_count=BC)
+    pop bc              ; [1] BC = actual count
+    push ix
+    pop hl              ; HL = host buffer
+    push bc             ; [1] re-save for return value
+    call W5100_READ_BUF ; reads BC bytes from W5100S at DE into (HL)
+    jr .recv_update_rd
 
-.recv_loop_done:
-    ; Write updated RD pointer back once
+.do_wrap:
+    ; Two reads: phys_start..0x67FF, then 0x6000..seg2_end
+    ; BC = actual count, DE = phys_start
+    ; seg1_len = 0x6800 - DE
+    ld h, 0x68
+    ld l, 0x00          ; HL = 0x6800
+    ld a, l
+    sub e
+    ld l, a
+    ld a, h
+    sbc a, d
+    ld h, a             ; HL = seg1_len (small: fits in low byte)
+
+    ; seg2_len = actual_count - seg1_len (both fit in 8 bits for <=255 batch)
+    ld a, c
+    sub l
+    ld (recv_seg2_len), a
+
+    ; Read segment 1
+    ld c, l
+    ld b, h             ; BC = seg1_len
+    push ix
+    pop hl              ; HL = host buffer
+    call W5100_READ_BUF ; HL advances to host_buf + seg1_len
+
+    ; Read segment 2 from ring buffer start
+    ld de, S0_RX_BASE   ; DE = 0x6000
+    ld a, (recv_seg2_len)
+    ld c, a
+    ld b, 0             ; BC = seg2_len
+    call W5100_READ_BUF
+
+.recv_update_rd:
+    ; Write updated RD pointer back
+    ld hl, (recv_new_rd)
+    ld d, h
+    ld e, l
     ld hl, S0_RX_RD0
     ld a, d
     call W5100_WRITE_REG
@@ -516,16 +554,20 @@ NET_RECV:
     call W5100_WRITE_REG
     call WAIT_CMD_DONE
 
-    pop bc              ; [A] return actual count
-    or a                ; clear carry
+    pop bc              ; [1] actual count (return value)
+    pop ix
+    or a                ; clear carry = success
     ret
 
 .recv_no_data:
-    pop bc              ; [B] discard requested
-    pop hl              ; [A] discard buffer ptr
+    pop bc              ; [1] discard requested
     ld bc, 0
+    pop ix
     or a
     ret
+
+recv_new_rd:    dw 0    ; temp: updated RX read pointer
+recv_seg2_len:  db 0    ; temp: second segment length when ring wraps
 
 ;-------------------------------------------------------
 ; NET_CLOSE - Close socket (like M4 C_NETCLOSE)

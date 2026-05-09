@@ -39,17 +39,15 @@ ScreenWrite
 	PUSH	BC
 	PUSH	AF			; Save registers
 	LD	D,A			; Temp save for A
-	
+
 	LD	A,(CursorOn)
 	OR	A			; Well, what do we have here?!
 	CALL	NZ,ToggleCursor		; If cursor on, then remove
-
 	XOR	A
 	LD	(CursorOn),A		; And cursor is now off
 	LD	(CursorCount),A		; Restart count
 	LD	A,#C9
 	LD	(JChangeCursor),A	; Disable flashing temp
-	
 	LD	A,D			; Restore value of A
 
 	CP	31			; Is it a control character?
@@ -84,7 +82,7 @@ SW1
 
 	CALL	JSmash
 
-	call ROMDIS
+	CALL	ROMDIS
 	EX	HL,DE
 	LD	HL,(CursorPosition)
 	PUSH	HL			; Save cursor position for later
@@ -145,7 +143,7 @@ SW1
 
 	LD	A,(DE)			; 8
 	LD	(HL),A
-	call romen
+	CALL	romen
 
 	POP	HL			; Restore cursor position
 	LD	A,H
@@ -170,8 +168,8 @@ SW_Restore				; Restore all values, and then return
 	LD	(JSW_LF),A		; Turn LF back on
 	LD	(JSW_FF),A		; Turn FF back on
 SWR_None
-	XOR	A			; Cursor int back on
-	LD	(JChangeCursor),A
+	XOR	A
+	LD	(JChangeCursor),A	; Cursor int back on
 	POP	AF
 	POP	BC
 	POP	DE
