@@ -40,6 +40,9 @@ ScreenWrite
 	PUSH	AF			; Save registers
 	LD	D,A			; Temp save for A
 
+	LD	A,(BatchMode)		; In batch mode, caller already handled cursor/ROM
+	OR	A
+	JR	NZ,.sw_batchmode
 	LD	A,(CursorOn)
 	OR	A			; Well, what do we have here?!
 	CALL	NZ,ToggleCursor		; If cursor on, then remove
@@ -48,6 +51,7 @@ ScreenWrite
 	LD	(CursorCount),A		; Restart count
 	LD	A,#C9
 	LD	(JChangeCursor),A	; Disable flashing temp
+.sw_batchmode:
 	LD	A,D			; Restore value of A
 
 	CP	31			; Is it a control character?
@@ -82,7 +86,9 @@ SW1
 
 	CALL	JSmash
 
-	CALL	ROMDIS
+	LD	A,(BatchMode)
+	OR	A
+	CALL	Z,ROMDIS		; skip in batch mode — caller already holds ROM disabled
 	EX	HL,DE
 	LD	HL,(CursorPosition)
 	PUSH	HL			; Save cursor position for later
@@ -143,7 +149,9 @@ SW1
 
 	LD	A,(DE)			; 8
 	LD	(HL),A
-	CALL	romen
+	LD	A,(BatchMode)
+	OR	A
+	CALL	Z,romen			; skip in batch mode — caller will call ROMEN after batch
 
 	POP	HL			; Restore cursor position
 	LD	A,H
@@ -168,8 +176,12 @@ SW_Restore				; Restore all values, and then return
 	LD	(JSW_LF),A		; Turn LF back on
 	LD	(JSW_FF),A		; Turn FF back on
 SWR_None
+	LD	A,(BatchMode)		; Keep JChangeCursor suppressed while batching
+	OR	A
+	JR	NZ,.swr_none_skip
 	XOR	A
 	LD	(JChangeCursor),A	; Cursor int back on
+.swr_none_skip:
 	POP	AF
 	POP	BC
 	POP	DE
@@ -178,7 +190,12 @@ SWR_None
 
 SWR_FF	XOR	A
 	LD	(JSW_FF),A		; Turn FF back on
+	LD	A,(BatchMode)
+	OR	A
+	JR	NZ,.swr_ff_skip
+	XOR	A
 	LD	(JChangeCursor),A	; And cursor may flash now
+.swr_ff_skip:
 	POP	AF			; Then registers
 	POP	BC
 	POP	DE
@@ -187,7 +204,12 @@ SWR_FF	XOR	A
 
 SWR_LF	XOR	A
 	LD	(JSW_LF),A		; Turn LF back on
+	LD	A,(BatchMode)
+	OR	A
+	JR	NZ,.swr_lf_skip
+	XOR	A
 	LD	(JChangeCursor),A	; And cursor may flash now
+.swr_lf_skip:
 	POP	AF			; and registers
 	POP	BC
 	POP	DE

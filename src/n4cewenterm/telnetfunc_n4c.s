@@ -231,7 +231,19 @@ recv_noblock2:
     or c
     jp z, recv_done
 
-    ; DE = byte count, HL = start of batch
+    ; Enter batch mode: hold ROMDIS for the entire batch.
+    ; Do NOT call ToggleCursor here — it sets B=8 internally, corrupting BC.
+    ; CursorOn=0 is enough; the cursor artifact is overwritten by the first char rendered.
+    ld a, #C9
+    ld (JChangeCursor), a   ; suppress cursor interrupt
+    xor a
+    ld (CursorOn), a
+    ld (CursorCount), a
+    call ROMDIS             ; hold ROM disabled for the whole batch
+    ld a, 1
+    ld (BatchMode), a
+
+    ; DE = byte count, HL = start of batch (BC still has count from NET_RECV)
     ld d, b
     ld e, c
     ld hl, recv_batch
@@ -239,7 +251,7 @@ recv_noblock2:
 .batch_loop:
     ld a, d
     or e
-    jp z, recv_done
+    jp z, .batch_cleanup
 
     ld c, (hl)          ; C = current byte
     inc hl              ; advance batch pointer now (before push)
@@ -353,6 +365,12 @@ recv_noblock2:
     pop de              ; restore batch count
     pop hl              ; restore batch pointer
     jp .batch_loop
+
+.batch_cleanup:
+    call ROMEN
+    xor a
+    ld (BatchMode), a
+    ld (JChangeCursor), a   ; re-enable cursor interrupt
 
 recv_done:
     pop hl
@@ -599,6 +617,7 @@ port:           dw 23           ; Port 23 (default telnet port)
 sendtext:       ds 255
 recvbuf:        ds 2048
 recv_batch:     ds 255          ; batch receive buffer (255 bytes per mainloop tick)
+BatchMode:      db 0            ; 1 = batch mode active (ROMDIS held, JChangeCursor suppressed)
 
 ; Telnet state machine for IAC sequence handling
 ; 0 = normal data, 1 = got IAC (0xFF), 2 = got IAC+command
