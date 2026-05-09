@@ -122,7 +122,6 @@ connect_ok:
 
 mainloop:
     ; Check for received data
-    ld bc, 1
     call recv_noblock2
 
     ; Check keyboard
@@ -208,11 +207,10 @@ recv_noblock2:
     push de
     push hl
 
-    ; Check if still connected
+    ; Check connection once per call, not per byte
     call CHECK_CONNECTION
     jr nc, .still_ok
 
-    ; Debug: show why we're disconnecting
     push af
     ld hl, msgdebug_disconn
     call disptextz
@@ -224,146 +222,155 @@ recv_noblock2:
     jp exit_close
 
 .still_ok:
+    ; Receive up to 255 bytes in a single batch (one SCMD_RECV for all)
+    ld hl, recv_batch
+    ld bc, 255
+    call NET_RECV       ; BC = actual bytes received
 
-    ; Try to receive data
-    ld hl, recvbuf
-    ld bc, 1            ; Read 1 byte at a time
-    call NET_RECV
-
-    ; Check if got data - CRITICAL: return immediately if no data
-    ; Don't process state machine on empty reads!
     ld a, b
     or c
-    jp z, recv_done     ; No data - return WITHOUT processing state
+    jp z, recv_done
 
-    ; Got data - process with state machine AND respond to IAC
-    ld hl, recvbuf
-    ld a, (hl)
+    ; Enter batch mode: hold ROMDIS for the entire batch.
+    ; Do NOT call ToggleCursor here — it sets B=8 internally, corrupting BC.
+    ; CursorOn=0 is enough; the cursor artifact is overwritten by the first char rendered.
+    ld a, #C9
+    ld (JChangeCursor), a   ; suppress cursor interrupt
+    xor a
+    ld (CursorOn), a
+    ld (CursorCount), a
+    call ROMDIS             ; hold ROM disabled for the whole batch
+    ld a, 1
+    ld (BatchMode), a
 
-    ; Check telnet state machine
-    ld hl, telnet_iac_state
-    ld b, (hl)          ; B = state (0=normal, 1=got IAC, 2=got IAC+cmd)
+    ; DE = byte count, HL = start of batch (BC still has count from NET_RECV)
+    ld d, b
+    ld e, c
+    ld hl, recv_batch
 
-    ; State 0: Normal data
-    ld a, b
+.batch_loop:
+    ld a, d
+    or e
+    jp z, .batch_cleanup
+
+    ld c, (hl)          ; C = current byte
+    inc hl              ; advance batch pointer now (before push)
+    dec de              ; decrement remaining count
+
+    ; Check IAC state: 0=normal, 1=got IAC, 2=got IAC+cmd
+    ld a, (telnet_iac_state)
     or a
-    jr nz, iac_state_1_or_2
+    jr nz, .handle_iac  ; rare: inside an IAC sequence
 
-    ; Normal state - check if this is IAC (0xFF)
-    ld a, (recvbuf)
+    ; State 0: normal data — check for IAC byte (0xFF)
+    ld a, c
     cp CMD
-    jr nz, normal_char
+    jr z, .got_iac      ; rare
 
-    ; Got IAC - enter state 1
-    ld (hl), 1
-    jp recv_done
+    ; Normal character — call ToScreen directly (saves ~125 T vs PrintChar).
+    ; ToScreen/ScreenWrite handle all control chars; both preserve all registers.
+    call ToScreen       ; A = character (set by ld a, c above, unchanged by cp/jr)
+    jp .batch_loop
 
-normal_char:
-    ; Display normal character
-    ld b, a
-    call printchar
-    jp recv_done
+.got_iac:
+    ld a, 1
+    ld (telnet_iac_state), a
+    jp .batch_loop
 
-iac_state_1_or_2:
-    ; State 1: Got IAC, waiting for command (WILL/WONT/DO/DONT)
-    ld a, b
+.handle_iac:
     cp 1
-    jr nz, iac_state_2
+    jr nz, .iac_2
 
-    ; This byte is the telnet command - save it and go to state 2
-    ld a, (recvbuf)
+    ; State 1: save command byte, enter state 2
+    ld a, c
     ld (telnet_iac_cmd), a
-    ld (hl), 2          ; Enter state 2
-    jp recv_done
+    ld a, 2
+    ld (telnet_iac_state), a
+    jp .batch_loop
 
-iac_state_2:
-    ; State 2: Got IAC+command, this is the option byte
-    ; Build appropriate response based on command received
+.iac_2:
+    ; State 2: option byte — save batch state, build and send response
+    push hl             ; save batch pointer
+    push de             ; save batch count
+
     ld a, (telnet_iac_cmd)
-    ld b, a
-    ld a, (recvbuf)
-    ld c, a             ; C = option code
+    ld b, a             ; B = cmd, C = option (already set)
 
-    ; Check if this is ECHO option (option 1)
     ld a, c
     cp 1                ; ECHO option?
-    jr nz, not_echo
+    jr nz, .not_echo
 
-    ; ECHO option - check if server WILL or WONT echo
     ld a, b
-    cp 0xFB             ; WILL?
-    jr nz, check_wont_echo
+    cp 0xFB             ; WILL ECHO?
+    jr nz, .chk_wont_echo
 
-    ; Server WILL ECHO - disable our local echo (for password entry)
     xor a
     ld (local_echo_enabled), a
-    ; Respond with DO ECHO
     ld hl, telnet_response
-    ld (hl), 0xFF       ; IAC
+    ld (hl), 0xFF
     inc hl
     ld (hl), 0xFD       ; DO
     inc hl
-    ld (hl), 1          ; ECHO
-    jr send_response
+    ld (hl), 1
+    jr .send_resp
 
-check_wont_echo:
-    cp 0xFC             ; WONT?
-    jr nz, not_echo
+.chk_wont_echo:
+    cp 0xFC             ; WONT ECHO?
+    jr nz, .not_echo
 
-    ; Server WONT ECHO - enable our local echo (normal mode)
     ld a, 1
     ld (local_echo_enabled), a
-    ; Respond with DONT ECHO
     ld hl, telnet_response
-    ld (hl), 0xFF       ; IAC
+    ld (hl), 0xFF
     inc hl
     ld (hl), 0xFE       ; DONT
     inc hl
-    ld (hl), 1          ; ECHO
-    jr send_response
+    ld (hl), 1
+    jr .send_resp
 
-not_echo:
-    ; Not ECHO option - use default responses
-    ; If server sent DO (0xFD) -> we respond WONT (0xFC)
-    ; If server sent WILL (0xFB) -> we respond DONT (0xFE)
+.not_echo:
     ld a, b
     cp 0xFD             ; DO?
-    jr z, respond_wont
+    jr z, .rsp_wont
     cp 0xFB             ; WILL?
-    jr z, respond_dont
-    ; Otherwise don't respond, just reset state
-    jr reset_state
+    jr z, .rsp_dont
+    jr .rst_state
 
-respond_wont:
-    ; Build: IAC WONT <option>
+.rsp_wont:
     ld hl, telnet_response
-    ld (hl), 0xFF       ; IAC
+    ld (hl), 0xFF
     inc hl
     ld (hl), 0xFC       ; WONT
     inc hl
-    ld (hl), c          ; option
-    jr send_response
+    ld (hl), c
+    jr .send_resp
 
-respond_dont:
-    ; Build: IAC DONT <option>
+.rsp_dont:
     ld hl, telnet_response
-    ld (hl), 0xFF       ; IAC
+    ld (hl), 0xFF
     inc hl
     ld (hl), 0xFE       ; DONT
     inc hl
-    ld (hl), c          ; option
+    ld (hl), c
 
-send_response:
-    ; Send the 3-byte response
+.send_resp:
     ld hl, telnet_response
     ld bc, 3
     call NET_SEND
 
-reset_state:
-    ; Reset state machine
+.rst_state:
     ld hl, telnet_iac_state
     ld (hl), 0
-    jp recv_done
+
+    pop de              ; restore batch count
+    pop hl              ; restore batch pointer
+    jp .batch_loop
+
+.batch_cleanup:
+    call ROMEN
+    xor a
+    ld (BatchMode), a
+    ld (JChangeCursor), a   ; re-enable cursor interrupt
 
 recv_done:
     pop hl
@@ -609,6 +616,8 @@ ip_addr:        db 127,0,0,1    ; Default localhost (for testing)
 port:           dw 23           ; Port 23 (default telnet port)
 sendtext:       ds 255
 recvbuf:        ds 2048
+recv_batch:     ds 255          ; batch receive buffer (255 bytes per mainloop tick)
+BatchMode:      db 0            ; 1 = batch mode active (ROMDIS held, JChangeCursor suppressed)
 
 ; Telnet state machine for IAC sequence handling
 ; 0 = normal data, 1 = got IAC (0xFF), 2 = got IAC+command
