@@ -1,28 +1,34 @@
-; N4C-NETINIT - SIMPLE COUNT TEST
-; Just count how many bytes we can read from N4C.CFG
+; N4C-NETINIT-KV - Network initialization for Net4CPC
+;
+; USB/FAT build (-DAMSDOS_USB=1): N4C_INIT reads N4C.CFG from disc and parses it.
+; Standard AMSDOS build: N4C_INIT uses config pre-loaded into RAM by the BASIC
+;   loader.  The .BAS file reads N4C.CFG via OPENIN and POKEs 16 bytes starting
+;   at N4C_CFG_BASE (&3F10):
+;     &3F10 IP[0..3]   &3F14 MASK[0..3]   &3F18 GW[0..3]   &3F1C DNS[0..3]
 
 ;=======================================================
-; Constants
+; Firmware vectors (CAS IN)
 ;=======================================================
-N4C_CONFIG_FILENAME: db "N4C.CFG",0
-
-; Firmware routines
+IFDEF AMSDOS_USB
+; USB/FAT Unidos roms (Albireo/GoTek): CAS IN +3 from standard
 CAS_IN_OPEN         equ 0xBC77
 CAS_IN_CLOSE        equ 0xBC7A
 CAS_IN_CHAR         equ 0xBC80
 CAS_IN_DIRECT       equ 0xBC83
+ENDIF
 
 ;=======================================================
-; N4C_INIT - Count bytes in N4C.CFG
+; N4C_INIT - Initialize network
 ;=======================================================
 N4C_INIT:
     push hl
     push de
     push bc
 
-    ; Open file - NO messages while file is open!
+IFDEF AMSDOS_USB
+    ; Open N4C.CFG from disc
     ld hl, N4C_CONFIG_FILENAME
-    ld b, 7                     ; CAS_IN_OPEN needs B = filename length
+    ld b, 7
     call CAS_IN_OPEN
     jp nc, .file_not_found
 
@@ -33,45 +39,39 @@ N4C_INIT:
 .read_loop:
     call CAS_IN_DIRECT
     jr nc, .read_done
-
     ld (hl), a
     inc hl
     inc b
     jr .read_loop
 
 .read_done:
-    ; Check if first byte is FF (corrupted)
-    ; Only shift if it is
+    ; First byte 0xFF means AMSDOS header prepended — shift content down by 1
     ld a, (file_buffer)
     cp 0xFF
-    jr nz, .eof             ; First byte is good, no shift needed
+    jr nz, .eof
 
-    ; First byte is FF, shift everything down by 1
     push bc
     ld a, b
     or a
     jr z, .skip_shift
-
-    ld hl, file_buffer+1    ; Source
-    ld de, file_buffer      ; Dest
+    ld hl, file_buffer+1
+    ld de, file_buffer
     ld a, b
-    dec a                   ; Count = bytes - 1
+    dec a
     ld b, a
-
 .shift_loop:
     ld a, (hl)
     ld (de), a
     inc hl
     inc de
     djnz .shift_loop
-
 .skip_shift:
     pop bc
 
 .eof:
     call CAS_IN_CLOSE
 
-    ; Parse each field using key=value format
+    ; Parse each key=value field
     ld hl, file_buffer
     ld de, key_ip
     ld bc, n4c_ip_addr
@@ -92,38 +92,12 @@ N4C_INIT:
     ld bc, n4c_dns
     call find_and_parse
 
-    ; Display configuration (commented out for cleaner startup)
-    ; ld hl, msg_ip
-    ; call n4c_print
-    ; ld hl, n4c_ip_addr
-    ; call print_ip
-
-    ; ld hl, msg_netmask
-    ; call n4c_print
-    ; ld hl, n4c_netmask
-    ; call print_ip
-
-    ; ld hl, msg_gateway
-    ; call n4c_print
-    ; ld hl, n4c_gateway
-    ; call print_ip
-
-    ; ld hl, msg_dns
-    ; call n4c_print
-    ; ld hl, n4c_dns
-    ; call print_ip
+ENDIF   ; AMSDOS_USB
+        ; Standard build: config already in RAM at N4C_CFG_BASE, fall through
 
     ; Initialize W5100S
     call n4c_init_w5100
     jr c, .w5100_error
-
-    ; Network initialization successful - no output for cleaner startup
-    ; ld hl, msg_ready
-    ; call n4c_print
-
-    ; ld hl, msg_press_key
-    ; call n4c_print
-    ; call 0xBB18             ; Wait for key
 
     pop bc
     pop de
@@ -140,6 +114,7 @@ N4C_INIT:
     scf
     ret
 
+IFDEF AMSDOS_USB
 .file_not_found:
     ld hl, msg_err_no_file
     call n4c_print
@@ -150,19 +125,18 @@ N4C_INIT:
     ret
 
 ;=======================================================
-; find_and_parse - Find key in buffer and parse value
+; find_and_parse - Find key in buffer and parse IP value
 ; Entry: HL = buffer, DE = key string, BC = destination
 ;=======================================================
 find_and_parse:
-    push bc                     ; Save destination
+    push bc
 
 .scan_line:
-    push hl                     ; Save line start position
-    call match_key              ; Z if matched, HL points after key
-    jr z, .found_key            ; If found, HL already at '='
+    push hl
+    call match_key
+    jr z, .found_key
 
-    pop hl                      ; Restore line start
-    ; Skip to next line
+    pop hl
 .skip_eol:
     ld a, (hl)
     or a
@@ -173,7 +147,6 @@ find_and_parse:
     cp 10
     jr nz, .skip_eol
     jr .scan_line
-
 .skip_lf:
     ld a, (hl)
     cp 10
@@ -186,36 +159,32 @@ find_and_parse:
     ret
 
 .found_key:
-    pop af                      ; Discard saved line start
-    inc hl                      ; Skip '='
-    pop bc                      ; BC = destination
+    pop af
+    inc hl          ; skip '='
+    pop bc
     push bc
 
-    ; Parse 4 octets
     ld ix, 0
     add ix, bc
     ld b, 4
-
 .octet_loop:
-    call parse_decimal_byte     ; A = octet
+    call parse_decimal_byte
     ld (ix+0), a
     inc ix
     djnz .check_dot
     jr .done
-
 .check_dot:
     ld a, (hl)
     cp '.'
     jr nz, .done
     inc hl
     jr .octet_loop
-
 .done:
     pop bc
     ret
 
 ;=======================================================
-; match_key - Compare key at DE with text at HL
+; match_key - Match key at DE against text at HL
 ; Exit: Z if matched, HL points at char after key
 ;=======================================================
 match_key:
@@ -230,27 +199,26 @@ match_key:
     inc hl
     inc de
     jr .loop
-
 .matched:
     ld a, (hl)
-    cp 61                       ; '=' character
+    cp 61           ; '='
     ret
 
+ENDIF   ; AMSDOS_USB
+
 ;=======================================================
-; parse_decimal_byte - Parse decimal number
-; Entry: HL = buffer position
-; Exit: A = number, HL advanced
+; parse_decimal_byte - Parse decimal number at HL
+; Exit: A = value, HL advanced past digits
+; (used by both builds: find_and_parse and wget.s PARSE_DOTTED_IP)
 ;=======================================================
 parse_decimal_byte:
     ld d, 0
-
 .loop:
     ld a, (hl)
     sub '0'
     jr c, .done
     cp 10
     jr nc, .done
-
     ld e, a
     ld a, d
     add a, a
@@ -260,16 +228,14 @@ parse_decimal_byte:
     add a, d
     add a, e
     ld d, a
-
     inc hl
     jr .loop
-
 .done:
     ld a, d
     ret
 
 ;=======================================================
-; n4c_init_w5100 - Initialize W5100S
+; n4c_init_w5100 - Write config into W5100S registers
 ;=======================================================
 n4c_init_w5100:
     push hl
@@ -277,37 +243,32 @@ n4c_init_w5100:
     push bc
     push af
 
-    ; Check mode register
+    ; Verify mode register
     ld bc, 0xFD20
     in a, (c)
     cp 3
     jr nz, .error
 
-    ; Set MAC
     ld hl, 0x0009
     ld de, n4c_mac_addr
     ld b, 6
     call n4c_write_w5100_bytes
 
-    ; Set Gateway
     ld hl, 0x0001
     ld de, n4c_gateway
     ld b, 4
     call n4c_write_w5100_bytes
 
-    ; Set Netmask
     ld hl, 0x0005
     ld de, n4c_netmask
     ld b, 4
     call n4c_write_w5100_bytes
 
-    ; Set IP
     ld hl, 0x000F
     ld de, n4c_ip_addr
     ld b, 4
     call n4c_write_w5100_bytes
 
-    ; Set DNS
     ld hl, 0x0032
     ld de, n4c_dns
     ld b, 4
@@ -329,106 +290,25 @@ n4c_init_w5100:
     ret
 
 ;=======================================================
-; n4c_write_w5100_bytes - Write bytes to W5100S
+; n4c_write_w5100_bytes - Write B bytes from (DE) to W5100S
+; Entry: HL = register address, DE = source, B = count
 ;=======================================================
 n4c_write_w5100_bytes:
 .loop:
     push bc
     push hl
-
     ld bc, 0xFD21
     out (c), h
     ld bc, 0xFD22
     out (c), l
-
     ld bc, 0xFD23
     ld a, (de)
     out (c), a
-
     pop hl
     inc hl
     inc de
     pop bc
     djnz .loop
-    ret
-
-;=======================================================
-; print_ip - Print IP address
-; Entry: HL = pointer to 4 bytes
-;=======================================================
-print_ip:
-    push hl
-    push bc
-    push af
-
-    ld b, 4
-.loop:
-    ld a, (hl)
-    call print_decimal
-    inc hl
-    dec b
-    jr z, .done
-    ld a, '.'
-    call n4c_print_char
-    jr .loop
-
-.done:
-    call n4c_print_crlf
-    pop af
-    pop bc
-    pop hl
-    ret
-
-;=======================================================
-; print_decimal - Print 0-255
-;=======================================================
-print_decimal:
-    push af
-    push bc
-    push de
-
-    ld e, a
-    ld d, 0
-
-    ld bc, 100
-    ld a, e
-.div_100:
-    cp c
-    jr c, .done_100
-    sub c
-    inc d
-    jr .div_100
-
-.done_100:
-    ld e, a
-    ld a, d
-    or a
-    jr z, .skip_100
-    add a, '0'
-    call n4c_print_char
-
-.skip_100:
-    ld a, e
-    ld d, 0
-.div_10:
-    cp 10
-    jr c, .done_10
-    sub 10
-    inc d
-    jr .div_10
-
-.done_10:
-    push af
-    ld a, d
-    add a, '0'
-    call n4c_print_char
-    pop af
-    add a, '0'
-    call n4c_print_char
-
-    pop de
-    pop bc
-    pop af
     ret
 
 ;=======================================================
@@ -470,51 +350,34 @@ n4c_print_crlf:
     pop af
     ret
 
-print_hex8:
-    push af
-    rrca
-    rrca
-    rrca
-    rrca
-    call print_hex4
-    pop af
-    call print_hex4
-    ret
-
-print_hex4:
-    and 0x0F
-    cp 10
-    jr c, .digit
-    add a, 'A' - 10
-    jr .print
-.digit:
-    add a, '0'
-.print:
-    call n4c_print_char
-    ret
-
 ;=======================================================
 ; Data
 ;=======================================================
+IFDEF AMSDOS_USB
+N4C_CONFIG_FILENAME: db "N4C.CFG",0
 key_ip:     db "IP",0
 key_mask:   db "MASK",0
 key_gw:     db "GW",0
 key_dns:    db "DNS",0
+msg_err_no_file: db "ERROR: N4C.CFG not found",13,10,0
+ENDIF
 
-msg_ip:         db "IP Address: ",0
-msg_netmask:    db "Netmask:    ",0
-msg_gateway:    db "Gateway:    ",0
-msg_dns:        db "DNS Server: ",0
-msg_ready:      db "Network Ready",13,10,0
-msg_press_key:  db "Press any key...",13,10,0
-msg_err_no_file:    db "ERROR: N4C.CFG not found",13,10,0
 msg_err_w5100:  db "ERROR: W5100S not responding",13,10,0
 
-buffer_write_ptr: dw 0
 n4c_mac_addr:   db 0xDE,0xAD,0xBE,0xEF,0x00,0xFF
+
+IFDEF AMSDOS_USB
+; Config populated by N4C_INIT from disc
 n4c_ip_addr:    ds 4
 n4c_netmask:    ds 4
 n4c_gateway:    ds 4
 n4c_dns:        ds 4
-dummy_byte:     db 0            ; RIGHT BEFORE file_buffer
 file_buffer:    ds 128
+ELSE
+; Config populated by BASIC loader (POKE to these fixed addresses before CALL)
+N4C_CFG_BASE    equ 0x3F10
+n4c_ip_addr     equ N4C_CFG_BASE+0
+n4c_netmask     equ N4C_CFG_BASE+4
+n4c_gateway     equ N4C_CFG_BASE+8
+n4c_dns         equ N4C_CFG_BASE+12
+ENDIF

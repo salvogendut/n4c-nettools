@@ -25,10 +25,20 @@ N4C_ERR_PARSE       equ 3       ; Invalid config format
 N4C_ERR_W5100       equ 4       ; W5100S not responding
 
 ; Firmware routines
+; Standard AMSDOS addresses (ULIfAC and stock CPC hardware).
+; Build with -DAMSDOS_USB=1 for USB/FAT Unidos roms (Albireo/GoTek),
+; where an extra entry shifts CAS IN vectors +3 from standard.
+IFDEF AMSDOS_USB
 CAS_IN_OPEN         equ 0xBC77
 CAS_IN_CLOSE        equ 0xBC7A
 CAS_IN_CHAR         equ 0xBC80
 CAS_IN_DIRECT       equ 0xBC83
+ELSE
+CAS_IN_OPEN         equ 0xBC74
+CAS_IN_CLOSE        equ 0xBC77
+CAS_IN_CHAR         equ 0xBC7D
+CAS_IN_DIRECT       equ 0xBC80
+ENDIF
 
 ;=======================================================
 ; N4C_INIT - Initialize Net4CPC with configuration file
