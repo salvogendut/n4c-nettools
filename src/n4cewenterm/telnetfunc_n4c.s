@@ -231,15 +231,15 @@ recv_noblock2:
     or c
     jp z, recv_done
 
-    ; Enter batch mode: hold ROMDIS for the entire batch.
+    ; Enter batch mode: suppress cursor interrupt, skip per-char cursor management.
+    ; ROMDIS is NOT held here — SW1 calls it only around the 8-pixel write so that
+    ; firmware interrupt hooks (M4 ROM) can run safely between characters.
     ; Do NOT call ToggleCursor here — it sets B=8 internally, corrupting BC.
-    ; CursorOn=0 is enough; the cursor artifact is overwritten by the first char rendered.
     ld a, #C9
-    ld (JChangeCursor), a   ; suppress cursor interrupt
+    ld (JChangeCursor), a   ; suppress cursor interrupt (prevents ToggleCursor→ROMDIS during batch)
     xor a
     ld (CursorOn), a
     ld (CursorCount), a
-    call ROMDIS             ; hold ROM disabled for the whole batch
     ld a, 1
     ld (BatchMode), a
 
@@ -367,7 +367,6 @@ recv_noblock2:
     jp .batch_loop
 
 .batch_cleanup:
-    call ROMEN
     xor a
     ld (BatchMode), a
     ld (JChangeCursor), a   ; re-enable cursor interrupt
