@@ -76,97 +76,139 @@ ScreenWrite
 	CP	#9B
 	JP	Z,SW_Ansi		; Also, an Ansi switch on  
 					; Ansi handler does the rest
-SW1	
+SW1
+	LD	A,(BatchMode)
+	OR	A
+	JR	NZ,.sw1_batch		; batch mode: skip GetChar, attributes, ROM toggle
+
+	; Normal path — GetCharacter + attribute pipeline + ROMDIS/ROMEN per char
+	LD	A,D			; restore char (BatchMode check clobbered A)
 	LD	HL,Character		; Character buffer address
 	CALL	Getcharacter
 	CALL	JItalics		; Set the character matrix up
 	CALL	JBold
 	CALL	JUnder
 	CALL	JInverse
-
 	CALL	JSmash
-
-	LD	A,(BatchMode)
-	OR	A
-	CALL	Z,ROMDIS		; skip in batch mode — caller already holds ROM disabled
-	EX	HL,DE
+	CALL	ROMDIS
+	EX	HL,DE			; DE = Character[] buffer, HL freed
 	LD	HL,(CursorPosition)
-	PUSH	HL			; Save cursor position for later
-	
-	; Write Character to Cursor Position.
-
-	CALL	FindCursor		; Now HL = screen memory address
-					;     DE = character data address
-	LD	B,8			; Value to add between lines(high only)
-	LD	A,(DE)			; From buffer
-	LD	(HL),A			; To screen
-	LD	A,H			; To next block
+	PUSH	HL
+	CALL	FindCursor		; HL = screen addr, DE = Character[] (preserved)
+	LD	B,8
+	LD	A,(DE)			; 1
+	LD	(HL),A
+	LD	A,H
 	ADD	B
 	LD	H,A
-	INC	E			; To next DB
-
+	INC	E
 	LD	A,(DE)			; 2
 	LD	(HL),A
 	LD	A,H
 	ADD	B
 	LD	H,A
-	INC	E			; NB Must not be split across page
-
+	INC	E
 	LD	A,(DE)			; 3
 	LD	(HL),A
 	LD	A,H
 	ADD	B
 	LD	H,A
 	INC	E
-
 	LD	A,(DE)			; 4
 	LD	(HL),A
 	LD	A,H
 	ADD	B
 	LD	H,A
 	INC	E
-
 	LD	A,(DE)			; 5
 	LD	(HL),A
 	LD	A,H
 	ADD	B
 	LD	H,A
 	INC	E
-
 	LD	A,(DE)			; 6
 	LD	(HL),A
 	LD	A,H
 	ADD	B
 	LD	H,A
 	INC	E
-	
 	LD	A,(DE)			; 7
 	LD	(HL),A
 	LD	A,H
 	ADD	B
 	LD	H,A
 	INC	E
-
 	LD	A,(DE)			; 8
 	LD	(HL),A
-	LD	A,(BatchMode)
-	OR	A
-	CALL	Z,romen			; skip in batch mode — caller will call ROMEN after batch
+	CALL	romen
+	JR	.sw1_cursor
 
+.sw1_batch:
+	; Fast path: read directly from charset RAM (no copy, no attribute calls, no ROM toggle).
+	; Charset layout: address = (HCharSet + row) << 8 + char_code.
+	; D = char (saved at ScreenWrite entry). ROMDIS already held by recv_noblock2.
+	LD	E,D			; E = char code
+	LD	D,HCharSet		; D = 0x68 — (DE) = row 0 pixel data for this char
+	LD	HL,(CursorPosition)
+	PUSH	HL
+	CALL	FindCursor		; HL = screen addr; FindCursor preserves DE
+	LD	B,8
+	LD	A,(DE)			; row 1
+	LD	(HL),A
+	LD	A,H
+	ADD	B
+	LD	H,A
+	INC	D			; next charset row (INC D, not INC E)
+	LD	A,(DE)			; row 2
+	LD	(HL),A
+	LD	A,H
+	ADD	B
+	LD	H,A
+	INC	D
+	LD	A,(DE)			; row 3
+	LD	(HL),A
+	LD	A,H
+	ADD	B
+	LD	H,A
+	INC	D
+	LD	A,(DE)			; row 4
+	LD	(HL),A
+	LD	A,H
+	ADD	B
+	LD	H,A
+	INC	D
+	LD	A,(DE)			; row 5
+	LD	(HL),A
+	LD	A,H
+	ADD	B
+	LD	H,A
+	INC	D
+	LD	A,(DE)			; row 6
+	LD	(HL),A
+	LD	A,H
+	ADD	B
+	LD	H,A
+	INC	D
+	LD	A,(DE)			; row 7
+	LD	(HL),A
+	LD	A,H
+	ADD	B
+	LD	H,A
+	INC	D
+	LD	A,(DE)			; row 8
+	LD	(HL),A
+	; no ROMEN — batch mode holds ROM disabled until .batch_cleanup
+
+.sw1_cursor:
 	POP	HL			; Restore cursor position
 	LD	A,H
 	CP	79			; Are we at the right edge?
-	JR	NZ,SW1_5		; If yes
+	JR	NZ,SW1_5
 	LD	H,0			; Column zero now
-	
-	
 	CALL	SW_LFn			; Move down the line (don't load)
-
 	LD	A,#C9
-	LD	(JSW_LF),A		; Turn off line feed for next
-					; character
-	JP	SWR_None		; _don't_ re-enable LF and there
-					; is no need to re-enable FF either
+	LD	(JSW_LF),A		; Turn off line feed for next character
+	JP	SWR_None
 
 SW1_5	INC	H			; One more across
 	LD	(CursorPosition),HL
