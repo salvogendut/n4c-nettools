@@ -4,39 +4,30 @@
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+fix_crlf() {
+    local file="$1"
+    if file "$file" | grep -q "CRLF"; then
+        echo "  $file: already CR+LF"
+    else
+        perl -pi -e 's/\r?\n/\r\n/' "$file"
+        echo "  $file: converted to CR+LF"
+    fi
+}
+
 echo "Fixing line endings for CPC compatibility..."
 echo ""
 
-# Fix BASIC loaders in tools/bin/
-for file in "$REPO_DIR"/tools/bin/*.BAS; do
-    if [ -f "$file" ]; then
-        echo "Processing: $file"
-        if file "$file" | grep -q "CRLF"; then
-            echo "  Already has CR+LF line endings"
-        else
-            echo "  Converting to CR+LF..."
-            perl -pi -e 's/\r?\n/\r\n/' "$file"
-            echo "  Converted"
-        fi
-    fi
-done
+# BASIC loaders in all output directories (albireo/, standard/, and legacy flat layout)
+while IFS= read -r -d '' file; do
+    fix_crlf "$file"
+done < <(find "$REPO_DIR/tools/bin" -name "*.BAS" -print0 2>/dev/null)
 
-# Fix config example in repo root
-for file in "$REPO_DIR"/N4C.CFG.example "$REPO_DIR"/N4C.CFG; do
+# Config example files in repo root
+for file in "$REPO_DIR/N4C.CFG.example" "$REPO_DIR/N4C.CFG"; do
     if [ -f "$file" ]; then
-        echo "Processing: $file"
-        if file "$file" | grep -q "CRLF"; then
-            echo "  Already has CR+LF line endings"
-        else
-            echo "  Converting to CR+LF..."
-            perl -pi -e 's/\r?\n/\r\n/' "$file"
-            echo "  Converted"
-        fi
+        fix_crlf "$file"
     fi
 done
 
 echo ""
 echo "Done! All files are now CPC-compatible."
-echo ""
-echo "Files ready to copy to CPC disk:"
-ls -lh "$REPO_DIR"/tools/bin/*.BAS "$REPO_DIR"/tools/bin/*.BIN 2>/dev/null | awk '{print "  " $9 " (" $5 ")"}'

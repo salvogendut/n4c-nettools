@@ -160,20 +160,20 @@ RESOLVE_HOSTNAME:
     ld de, 0x6800               ; S1_RX_BASE
     add hl, de                  ; HL = physical address in W5100S
 
-    ; Read 64 bytes of DNS response
+    ; Read 512 bytes of DNS response
     ex de, hl                   ; DE = W5100S address
     ld hl, dns_response_buf     ; HL = our buffer
-    ld bc, 64                   ; Read 64 bytes
+    ld bc, 512                  ; Read 512 bytes
     call W5100_READ_BUF
 
-    ; Update RX_RD pointer (add 8 + 64 = 72)
+    ; Update RX_RD pointer (add 8 + 512 = 520)
     ld hl, 0x0528
     call W5100_READ_REG
     ld h, a
     ld hl, 0x0529
     call W5100_READ_REG
     ld l, a
-    ld de, 72
+    ld de, 520
     add hl, de
     ld d, h
     ld e, l
@@ -411,8 +411,11 @@ dns_encode_name:
 ;=======================================================
 ; DNS_PARSE_RESPONSE - Parse DNS response
 ; Entry: dns_response_buf = response message
-;        DE = result buffer (4 bytes for IP)
+;        dns_result_ptr   = pointer to 4-byte IP result buffer
 ; Exit:  Carry clear if OK, set if error
+;        A = error code if carry set
+; Scans all ANCOUNT answer RRs; skips CNAMEs; returns
+; the first TYPE A record found.
 ;=======================================================
 dns_parse_response:
     push hl
@@ -425,163 +428,188 @@ dns_parse_response:
     inc hl
     ld a, (hl)
     and DNS_QR_RESPONSE
-    jr z, .error_not_response   ; Not a response
+    jp z, .error_not_response
 
     ; Check error code (byte 3, low 4 bits)
     inc hl
     ld a, (hl)
     and 0x0F
-    jr nz, .error_server        ; Server returned error
+    jp nz, .error_server
 
-    ; Skip to answers (skip rest of header + question)
-    ; Header is 12 bytes total, we're at byte 3
-    ld bc, 8
-    add hl, bc                  ; HL now at byte 11 (last header byte)
+    ; Read ANCOUNT LSB (byte 7) — we're at byte 3
+    inc hl                      ; byte 4
+    inc hl                      ; byte 5
+    inc hl                      ; byte 6 (ANCOUNT MSB, skip)
+    inc hl                      ; byte 7 (ANCOUNT LSB)
+    ld a, (hl)
+    or a
+    jp z, .error_no_answers
+    ld (dns_ancount), a
 
-    ; Skip question section (we know it's 1 question)
-    ; Need to skip: QNAME + QTYPE + QCLASS
-    inc hl                      ; HL now at byte 12 (start of question)
+    ; Advance to byte 12 (start of question) — we're at byte 7
+    inc hl                      ; byte 8
+    inc hl                      ; byte 9
+    inc hl                      ; byte 10
+    inc hl                      ; byte 11
+    inc hl                      ; byte 12
 
-    ; Skip QNAME (find the 0 length byte)
+    ; Skip QNAME
 .skip_qname:
     ld a, (hl)
     inc hl
     or a
     jr z, .qname_done
-    ; Check for compression pointer
     and 0xC0
     cp 0xC0
-    jr z, .skip_pointer
-    ; Regular label - skip it
+    jr z, .skip_qname_ptr
     dec hl
     ld a, (hl)
     inc hl
     ld b, a
-.skip_label:
+.skip_qname_label:
     inc hl
-    djnz .skip_label
+    djnz .skip_qname_label
     jr .skip_qname
 
-.skip_pointer:
-    inc hl                      ; Skip pointer byte
-    jr .qname_done
+.skip_qname_ptr:
+    inc hl
+    ; fall through
 
 .qname_done:
     ; Skip QTYPE and QCLASS (4 bytes)
     ld bc, 4
     add hl, bc
 
-    ; Now at answer section
-    ; Skip answer NAME: may be a compression pointer (0xC0 xx)
-    ; or a full uncompressed name (sequence of length-prefixed labels + 0x00)
+    ; Scan answer RRs for first TYPE A record
+.answer_loop:
+    ; Skip RR NAME (compression pointer or full uncompressed name)
     ld a, (hl)
     and 0xC0
     cp 0xC0
-    jr z, .ans_ptr              ; compression pointer: skip 2 bytes
-.ans_skip_label_loop:
+    jr z, .rr_name_ptr
+
+.rr_name_label_loop:
     ld a, (hl)
     inc hl
     or a
-    jr z, .ans_name_done        ; 0x00 terminator: name complete
+    jr z, .rr_name_done         ; null terminator
     and 0xC0
     cp 0xC0
-    jr z, .ans_ptr_tail         ; pointer embedded at end of name
+    jr z, .rr_name_ptr_tail     ; pointer at end of name
     dec hl
-    ld a, (hl)                  ; re-read original length byte
+    ld a, (hl)
     inc hl
     ld b, a
-.ans_skip_chars:
+.rr_name_skip_chars:
     inc hl
-    djnz .ans_skip_chars
-    jr .ans_skip_label_loop
-.ans_ptr_tail:
-    inc hl                      ; skip second byte of the pointer
-    jr .ans_name_done
-.ans_ptr:
-    inc hl
-    inc hl
-.ans_name_done:
+    djnz .rr_name_skip_chars
+    jr .rr_name_label_loop
 
-    ; Check TYPE (should be A = 1)
+.rr_name_ptr_tail:
+    inc hl                      ; skip second byte of pointer
+    jr .rr_name_done
+
+.rr_name_ptr:
+    inc hl
+    inc hl
+
+.rr_name_done:
+    ; Read TYPE into D (MSB) and E (LSB)
     ld a, (hl)
     inc hl
-    or a
-    jr nz, .error_type_msb
+    ld d, a
     ld a, (hl)
     inc hl
-    cp DNS_TYPE_A
-    jr nz, .error_type_lsb
+    ld e, a
 
-    ; Skip CLASS (2 bytes) and TTL (4 bytes)
+    ; Skip CLASS (2 bytes) + TTL (4 bytes) = 6 bytes
     ld bc, 6
     add hl, bc
 
-    ; Check RDLENGTH (should be 4 for IPv4)
+    ; Read RDLENGTH into B (MSB) and C (LSB)
     ld a, (hl)
     inc hl
-    or a
-    jr nz, .error_rdlen_msb
+    ld b, a
     ld a, (hl)
     inc hl
-    cp 4
-    jr nz, .error_rdlen_lsb
+    ld c, a
+    ; HL now at start of RDATA
 
-    ; Copy 4-byte IP address to result buffer
+    ; Is TYPE A (0x0001)?
+    ld a, d
+    or a
+    jr nz, .rr_skip_rdata       ; TYPE MSB != 0
+    ld a, e
+    cp DNS_TYPE_A
+    jr nz, .rr_skip_rdata       ; TYPE LSB != 1
+
+    ; Found TYPE A — check RDLENGTH == 4
+    ld a, b
+    or a
+    jp nz, .error_rdlen_msb
+    ld a, c
+    cp 4
+    jp nz, .error_rdlen_lsb
+
+    ; Copy 4-byte IP to result buffer
+    ld de, (dns_result_ptr)
     ld bc, 4
     ldir
 
     pop bc
     pop hl
-    and a                       ; Clear carry (AND clears carry flag)
+    and a                       ; clear carry
     ret
+
+.rr_skip_rdata:
+    ; Not a TYPE A record — advance past RDATA and try next RR
+    add hl, bc                  ; HL += RDLENGTH
+    ld a, (dns_ancount)
+    dec a
+    jp z, .error_no_a_record
+    ld (dns_ancount), a
+    jp .answer_loop
 
 .error_not_response:
     pop bc
     pop hl
     scf
-    ld a, 21                    ; Error: QR bit not set (not a response)
+    ld a, 21                    ; QR bit not set
     ret
 
 .error_server:
     pop bc
     pop hl
     scf
-    ld a, 22                    ; Error: DNS server returned error code
+    ld a, 22                    ; server returned error code
     ret
 
-.error_name_not_ptr:
+.error_no_answers:
     pop bc
     pop hl
     scf
-    ld a, 23                    ; Error: Answer name not a pointer
+    ld a, 23                    ; ANCOUNT = 0
     ret
 
-.error_type_msb:
+.error_no_a_record:
     pop bc
     pop hl
     scf
-    ld a, 24                    ; Error: TYPE MSB not 0
-    ret
-
-.error_type_lsb:
-    pop bc
-    pop hl
-    scf
-    ld a, 25                    ; Error: TYPE not A record
+    ld a, 24                    ; no TYPE A found after scanning all RRs
     ret
 
 .error_rdlen_msb:
     pop bc
     pop hl
     scf
-    ld a, 26                    ; Error: RDLENGTH MSB not 0
+    ld a, 26                    ; RDLENGTH MSB not 0
     ret
 
 .error_rdlen_lsb:
     pop bc
     pop hl
     scf
-    ld a, 27                    ; Error: RDLENGTH not 4
+    ld a, 27                    ; RDLENGTH not 4
     ret
 
 ;=======================================================
@@ -601,6 +629,7 @@ dns_strcpy:
 ; DNS Data Buffers
 ;=======================================================
 dns_socket:         db 0
+dns_ancount:        db 0
 dns_send_time:      dw 0
 dns_timeout_time:   dw 0
 dns_query_len:      dw 0

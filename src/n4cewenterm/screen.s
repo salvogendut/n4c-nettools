@@ -144,15 +144,17 @@ SW1
 	JR	.sw1_cursor
 
 .sw1_batch:
-	; Fast path: read directly from charset RAM (no copy, no attribute calls, no ROM toggle).
+	; Fast path: read directly from charset RAM — no GetChar copy, no attribute calls.
 	; Charset layout: address = (HCharSet + row) << 8 + char_code.
-	; D = char (saved at ScreenWrite entry). ROMDIS already held by recv_noblock2.
+	; D = char (saved at ScreenWrite entry).
+	; ROMDIS is called here (not held for whole batch) so firmware interrupt hooks stay safe.
 	LD	E,D			; E = char code
 	LD	D,HCharSet		; D = 0x68 — (DE) = row 0 pixel data for this char
 	LD	HL,(CursorPosition)
 	PUSH	HL
 	CALL	FindCursor		; HL = screen addr; FindCursor preserves DE
 	LD	B,8
+	CALL	ROMDIS			; disable upper ROM for pixel write
 	LD	A,(DE)			; row 1
 	LD	(HL),A
 	LD	A,H
@@ -197,7 +199,7 @@ SW1
 	INC	D
 	LD	A,(DE)			; row 8
 	LD	(HL),A
-	; no ROMEN — batch mode holds ROM disabled until .batch_cleanup
+	CALL	romen			; re-enable upper ROM (ROMDIS window: ~80T)
 
 .sw1_cursor:
 	POP	HL			; Restore cursor position
