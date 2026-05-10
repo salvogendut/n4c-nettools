@@ -25,6 +25,8 @@ Two builds are produced, differing in how network config is read from `N4C.CFG`:
 
 The standard build exists because on ULIfAC (and other setups where the disc ROM patches BASIC commands rather than the CAS firmware vectors), calling `CAS_IN_OPEN` from machine code hits the tape AMSDOS rather than the disc. BASIC's `OPENIN` is intercepted by the disc ROM and works correctly, so the `.BAS` loader handles the file reading instead.
 
+> **Note:** the standard build has been confirmed to work on Albireo/GoTek hardware as well. Since the binary itself has no CAS firmware dependency (config is POKEd into RAM by the BASIC loader), it runs correctly regardless of which CAS vector set is in use. The two-target build will likely be collapsed into a single standard binary in a future release.
+
 ## Quick start — running the tools
 
 Copy the correct folder's files to your CPC disk along with `N4C.CFG`.
