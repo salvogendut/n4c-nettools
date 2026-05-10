@@ -98,8 +98,21 @@
 861 POKE &3F0C,prt MOD 256:REM port low byte
 862 POKE &3F0D,INT(prt/256):REM port high byte
 870 REM
-880 REM Load and run binary
+880 REM Read network config from N4C.CFG and load binary
 890 REM
+895 GOSUB 9000
 900 LOAD"WGET.BIN",&4000
 910 CALL &4000
 920 END
+9000 OPENIN "N4C.CFG"
+9010 ba=&3F10:GOSUB 9100
+9020 ba=&3F14:GOSUB 9100
+9030 ba=&3F18:GOSUB 9100
+9040 ba=&3F1C:GOSUB 9100
+9050 CLOSEIN:RETURN
+9100 INPUT #9,a$:IF a$="" THEN 9100
+9110 eq=INSTR(a$,"="):a$=MID$(a$,eq+1)
+9120 p=1:FOR oc=0 TO 3
+9130 q=INSTR(p,a$,"."):IF q=0 THEN q=LEN(a$)+1
+9140 POKE ba+oc,VAL(MID$(a$,p,q-p)):p=q+1
+9150 NEXT oc:RETURN

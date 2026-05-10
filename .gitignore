@@ -5,12 +5,11 @@ bin/
 
 # Committed release binaries in tools/bin/ (override the *.BIN / bin/ rules above)
 !tools/bin/
-!tools/bin/albireo/
-!tools/bin/standard/
-!tools/bin/albireo/*.BIN
-!tools/bin/albireo/*.BAS
-!tools/bin/standard/*.BIN
-!tools/bin/standard/*.BAS
+!tools/bin/*.BIN
+!tools/bin/*.BAS
+
+# Archived albireo BASIC loader sources
+!archive/albireo/*.BAS
 
 # Editor/IDE files
 *.swp

@@ -14,25 +14,9 @@ Z80 assembly network library and ready-to-run tools for the Amstrad CPC with [Ne
 | `src/wget/` | HTTP file downloader — fetches files from a URL and saves to disk |
 | `src/n4cewenterm/` | ANSI Telnet terminal client — full VT100/ANSI emulation over TCP |
 
-## Hardware targets
-
-Two builds are produced, differing in how network config is read from `N4C.CFG`:
-
-| Target | Hardware | `tools/bin/` folder | Config loading |
-|--------|----------|---------------------|----------------|
-| **Albireo** | Albireo / GoTek with USB/FAT Unidos roms | `tools/bin/albireo/` | Binary reads `N4C.CFG` directly via CAS firmware |
-| **Standard** | ULIfAC, stock CPC AMSDOS | `tools/bin/standard/` | BASIC loader reads `N4C.CFG` via `OPENIN`, POKEs config to RAM before calling binary |
-
-The standard build exists because on ULIfAC (and other setups where the disc ROM patches BASIC commands rather than the CAS firmware vectors), calling `CAS_IN_OPEN` from machine code hits the tape AMSDOS rather than the disc. BASIC's `OPENIN` is intercepted by the disc ROM and works correctly, so the `.BAS` loader handles the file reading instead.
-
-> **Note:** the standard build has been confirmed to work on Albireo/GoTek hardware as well. Since the binary itself has no CAS firmware dependency (config is POKEd into RAM by the BASIC loader), it runs correctly regardless of which CAS vector set is in use. The two-target build will likely be collapsed into a single standard binary in a future release.
-
 ## Quick start — running the tools
 
-Copy the correct folder's files to your CPC disk along with `N4C.CFG`.
-
-**Albireo / GoTek (USB/FAT Unidos):** use `tools/bin/albireo/`  
-**ULIfAC / stock AMSDOS:** use `tools/bin/standard/`
+Copy the files from `tools/bin/` to your CPC disk along with `N4C.CFG`. The binaries work on all hardware (Albireo/GoTek, ULIfAC, stock AMSDOS). Config is read from RAM by the BASIC loader using BASIC `OPENIN`, so no CAS firmware dependency.
 
 **NTP** — display current UTC time:
 ```
@@ -67,11 +51,10 @@ Requires [RASM](https://github.com/EdouardBERGE/rasm) assembler.
 ./build.sh
 ```
 
-Both hardware targets are built in one run:
+Output:
 
 ```
-tools/bin/albireo/   NTP.BIN  NTP.BAS  WGET.BIN  WGET.BAS  N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
-tools/bin/standard/  NTP.BIN  NTP.BAS  WGET.BIN  WGET.BAS  N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
+tools/bin/   NTP.BIN  NTP.BAS  WGET.BIN  WGET.BAS  N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
 ```
 
 CR+LF line endings are applied to all `.BAS` output files automatically.
@@ -91,28 +74,24 @@ src/
   n4c-netinit.s         Simple initializer (library)
   ntp/
     ntp.s               SNTPv4 time client
-    NTP.BAS             Albireo BASIC loader (binary reads N4C.CFG)
-    NTP_STD.BAS         Standard BASIC loader (BASIC reads N4C.CFG)
+    NTP.BAS             BASIC loader (reads N4C.CFG, POKEs RAM, calls binary)
   wget/
     wget.s              HTTP file downloader
-    WGET.BAS            Albireo BASIC loader
-    WGET_STD.BAS        Standard BASIC loader
+    WGET.BAS            BASIC loader
   n4cewenterm/
     termN4C.s           Main entry point
     charset.s           Code page 437 character set (loaded at 0x6800)
     main.s  ansiterm.s  screen.s  telnetfunc_n4c.s
     negotiate.s  urlmenu_n4c.s  data.s
-    N4CEWEN.BAS         Albireo BASIC loader
-    N4CEWEN_STD.BAS     Standard BASIC loader
+    N4CEWEN.BAS         BASIC loader
 tools/
-  bin/
-    albireo/            Albireo/GoTek build — copy this to USB/FAT disk
-      NTP.BIN  NTP.BAS  WGET.BIN  WGET.BAS
-      N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
-    standard/           Standard AMSDOS build — copy this to ULIfAC disk
-      NTP.BIN  NTP.BAS  WGET.BIN  WGET.BAS
-      N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
-build.sh                Builds all tools for both targets → tools/bin/
+  bin/                  Copy everything here to your CPC disk
+    NTP.BIN  NTP.BAS  WGET.BIN  WGET.BAS
+    N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
+archive/
+  albireo/              Retired Albireo-specific BASIC loaders (binary read N4C.CFG
+                        directly via CAS firmware; superseded by the BASIC-loader approach)
+build.sh                Builds all tools → tools/bin/
 utility/
   create_config.sh      Interactive N4C.CFG generator (CR+LF output)
   fix_cpc_files.sh      Convert BAS/CFG files to CR+LF for CPC disk
@@ -207,9 +186,7 @@ Timeout: 3000 ms. Uses Socket 1 (UDP).
     ; W5100S is now configured and ready
 ```
 
-**Albireo build** (`-DAMSDOS_USB=1`): `N4C_INIT` opens `N4C.CFG` via `CAS_IN_DIRECT`, parses the key=value pairs (IP, MASK, GW, DNS), and writes them into the W5100S registers.
-
-**Standard build**: `N4C_INIT` skips file I/O entirely and reads config from fixed RAM addresses `&3F10–&3F1F`, which the BASIC loader has already filled by the time the binary is called. The BASIC loader uses `OPENIN` / `INPUT #9` / `CLOSEIN` to read `N4C.CFG`.
+`N4C_INIT` reads config from fixed RAM addresses `&3F10–&3F1F`, which the BASIC loader has already filled before calling the binary. The BASIC loader uses `OPENIN` / `INPUT #9` / `CLOSEIN` to read `N4C.CFG`.
 
 Standard RAM layout (POKEd by BASIC before `CALL`):
 
@@ -222,23 +199,21 @@ Standard RAM layout (POKEd by BASIC before `CALL`):
 
 ## AMSDOS firmware vectors
 
-Two hardware variants are supported. The build flag `-DAMSDOS_USB=1` selects the Albireo/GoTek vector set; the standard build uses stock CPC addresses.
+Standard CPC addresses used by the library:
 
-| Routine | Standard CPC (`&`) | USB/FAT Unidos (`&`) |
-|---------|--------------------|----------------------|
-| CAS_IN_OPEN | BC74 | BC77 |
-| CAS_IN_CLOSE | BC77 | BC7A |
-| CAS_IN_CHAR | BC7D | BC80 |
-| CAS_IN_DIRECT | BC80 | BC83 |
-| CAS_OUT_OPEN | BC8C | BC8C |
-| CAS_OUT_CLOSE | BC8F | BC8F |
-| CAS_OUT_CHAR | BC95 | BC95 |
+| Routine | Address (`&`) |
+|---------|---------------|
+| CAS_IN_OPEN | BC74 |
+| CAS_IN_CLOSE | BC77 |
+| CAS_IN_CHAR | BC7D |
+| CAS_IN_DIRECT | BC80 |
+| CAS_OUT_OPEN | BC8C |
+| CAS_OUT_CLOSE | BC8F |
+| CAS_OUT_CHAR | BC95 |
 
 All CAS routines: carry SET = success, carry CLEAR = failure.
 
-The USB/FAT Unidos firmware inserts one extra entry before the standard CAS INPUT section, shifting all CAS IN vectors +3. CAS OUT addresses are identical on both.
-
-On ULIfAC and similar setups, `CAS_IN_OPEN` at &BC74 points to tape AMSDOS, not disc. BASIC's `OPENIN` statement is intercepted at a higher level by the disc ROM and works correctly — hence the two-loader approach.
+> **Note on Albireo/GoTek (USB/FAT Unidos):** Unidos shifts CAS IN vectors +3 from the standard addresses. The tools in this repo avoid this entirely — the BASIC loader uses BASIC `OPENIN` (intercepted by the disc ROM at a higher level), and the binary reads config from RAM rather than calling CAS firmware directly. The retired Albireo-specific loaders that called CAS firmware from machine code are in `archive/albireo/`.
 
 ## Using the library in your own project
 
@@ -258,7 +233,7 @@ Then include them at the bottom of your main assembly file:
     include "dns_simple.s"
 ```
 
-Build with `-DAMSDOS_USB=1` for Albireo/GoTek; omit the flag for ULIfAC/standard AMSDOS. Each application keeps its own copy — no shared build output, no external dependency at assemble time.
+Each application keeps its own copy of the library files — no shared build output, no external dependency at assemble time.
 
 ## Notable bugs found and fixed
 
