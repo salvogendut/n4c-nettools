@@ -9,11 +9,12 @@
 ;
 ; Press ESC to stop the server.
 ;
-; Note: CAS_IN routines are at standard AMSDOS addresses. File serving works
-; on ULIfAC and stock AMSDOS. On Albireo/GoTek (USB/FAT Unidos), CAS_IN is
-; shifted +3 from standard, so file serving will fail — build with
-; -DAMSDOS_USB=1 to use the shifted addresses if you need Albireo support.
-; N4C.CFG is loaded by the BASIC loader so network init is not affected.
+; Build flags:
+;   -DAMSDOS_USB=1   Albireo / GoTek with USB/FAT Unidos ROMs (CAS IN +3)
+;   (no flag)        ULIfAC, stock AMSDOS (standard CAS IN addresses)
+;
+; N4C.CFG is loaded by the BASIC loader (no CAS dependency for network init).
+; CAS_IN is used for file serving and IS hardware-specific — use the right flag.
 ;
 ; Build (from src/foal-httpd/ after copying library files):
 ;   cp ../w5100.s ../n4c-netinit-kv.s .
@@ -29,10 +30,14 @@ TXT_OUTPUT      equ     0xBB5A      ; output char in A to screen
 KM_WAIT_CHAR    equ     0xBB06      ; wait for keypress -> A
 KM_READ_CHAR    equ     0xBB09      ; non-blocking read; carry set = char in A
 
-; CAS INPUT routines — standard AMSDOS addresses
+; CAS INPUT routines.
+; USB/FAT build (-DAMSDOS_USB=1): symbols defined by n4c-netinit-kv.s (0xBC77/7A/80).
+; Standard build: defined here (0xBC74/77/7D).
+IFNDEF AMSDOS_USB
 CAS_IN_OPEN     equ     0xBC74
 CAS_IN_CLOSE    equ     0xBC77
 CAS_IN_CHAR     equ     0xBC7D
+ENDIF
 
 HTTP_PORT       equ     80
 FILE_BUF_SIZE   equ     128

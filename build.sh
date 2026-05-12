@@ -31,9 +31,10 @@ build_tool() {
     local main_s="$2"
     local bin_name="$3"
     local bas_name="$4"
+    local extra_flags="${5:-}"
 
     cp "$SRC_DIR/w5100.s" "$SRC_DIR/dns_simple.s" "$SRC_DIR/n4c-netinit-kv.s" "$tool_dir/"
-    (cd "$tool_dir" && $RASM "$main_s") 2>&1 | grep -E "error|FAILED|Write binary"
+    (cd "$tool_dir" && $RASM $extra_flags "$main_s") 2>&1 | grep -E "error|FAILED|Write binary"
     local status=${PIPESTATUS[0]}
     rm -f "$tool_dir/w5100.s" "$tool_dir/dns_simple.s" "$tool_dir/n4c-netinit-kv.s"
 
@@ -69,7 +70,7 @@ build_ewenterm() {
 echo ""
 build_tool ntp        ntp.s        NTP.BIN   NTP.BAS   || exit 1
 build_tool wget       wget.s       WGET.BIN  WGET.BAS  || exit 1
-build_tool foal-httpd foal-httpd.s HTTPD.BIN HTTPD.BAS || exit 1
+build_tool foal-httpd foal-httpd.s HTTPD.BIN HTTPD.BAS "-DAMSDOS_USB=1" || exit 1
 build_ewenterm || exit 1
 
 echo ""
