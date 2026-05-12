@@ -462,17 +462,21 @@ HTTP_SERVE_FILE:
         ; closes the connection (e.g. browser gave up after receiving too much).
         ld      hl, file_buf
         ld      (file_buf_wr), hl
-        ld      iy, 0x8000          ; 32 KB limit
+        ld      hl, 0x8000          ; 32 KB safety limit
+        ld      (bytes_left), hl
 
 .read_loop:
-        ld      a, iyh
-        or      iyl
+        ld      hl, (bytes_left)
+        ld      a, h
+        or      l
         jr      z, .eof             ; safety limit reached — treat as EOF
 
         call    CAS_IN_CHAR         ; carry set = byte in A; clear = EOF
         jr      nc, .eof
 
-        dec     iy
+        ld      hl, (bytes_left)
+        dec     hl
+        ld      (bytes_left), hl
 
         ld      hl, (file_buf_wr)
         ld      (hl), a
@@ -631,6 +635,7 @@ PRINT_CRLF:
 drain_state:    defb    0
 http_rxbyte:    defb    0
 file_buf_wr:    defw    0
+bytes_left:     defw    0           ; safety byte counter for file read loop
 
 ; =============================================================================
 ; Buffers
