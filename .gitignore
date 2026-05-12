@@ -3,10 +3,11 @@
 *.bin
 bin/
 
-# Committed release binaries in tools/bin/ (override the *.BIN / bin/ rules above)
+# Committed release binaries and content in tools/bin/ (override *.BIN / bin/ rules above)
 !tools/bin/
 !tools/bin/*.BIN
 !tools/bin/*.BAS
+!tools/bin/*.HTM
 
 # Archived albireo BASIC loader sources
 !archive/albireo/*.BAS
