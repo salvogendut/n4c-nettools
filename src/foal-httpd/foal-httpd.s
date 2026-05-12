@@ -436,6 +436,10 @@ HTTP_SERVE_FILE:
         jr      .len
 
 .open_file:
+        ; Defensive close in case a previous interrupted read left the CAS
+        ; input channel occupied — CAS_IN_CLOSE is a no-op when nothing is open.
+        call    CAS_IN_CLOSE
+
         ld      hl, fname_buf
         call    CAS_IN_OPEN         ; carry set = OK, carry clear = not found
         jr      nc, .not_found
@@ -452,14 +456,23 @@ HTTP_SERVE_FILE:
         call    NET_SEND
 
         ; Read file in FILE_BUF_SIZE chunks, sending each.
-        ; CHECK_CONNECTION is called before each flush so we stop if the
-        ; peer closes the connection mid-transfer (prevents CAS loops).
+        ; IY = remaining-byte safety counter (32 KB max) — prevents infinite
+        ; CAS loops on files without a proper AMSDOS header.
+        ; CHECK_CONNECTION before each flush stops the loop early if the peer
+        ; closes the connection (e.g. browser gave up after receiving too much).
         ld      hl, file_buf
         ld      (file_buf_wr), hl
+        ld      iy, 0x8000          ; 32 KB limit
 
 .read_loop:
+        ld      a, iyh
+        or      iyl
+        jr      z, .eof             ; safety limit reached — treat as EOF
+
         call    CAS_IN_CHAR         ; carry set = byte in A; clear = EOF
         jr      nc, .eof
+
+        dec     iy
 
         ld      hl, (file_buf_wr)
         ld      (hl), a
