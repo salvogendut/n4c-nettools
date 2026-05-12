@@ -74,7 +74,9 @@ main_loop:
 .wait_connect:
         call    KM_READ_CHAR
         jr      nc, .no_esc
-        cp      27                  ; ESC
+        cp      'Q'
+        jr      z, .stop
+        cp      'q'
         jr      z, .stop
 .no_esc:
         ld      hl, S0_SR
@@ -664,7 +666,7 @@ msg_init:
 msg_ok:
         db      " OK", 0x0D, 0x0A, 0
 msg_listening:
-        db      "Listening on port 80. Press ESC to stop.", 0x0D, 0x0A, 0
+        db      "Listening on port 80. Press Q to exit.", 0x0D, 0x0A, 0
 msg_connected:
         db      "Connection received.", 0x0D, 0x0A, 0
 msg_serving:
