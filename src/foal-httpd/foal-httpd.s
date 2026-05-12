@@ -171,6 +171,7 @@ HTTP_HANDLE_REQUEST:
         jr      c, .abort           ; connection closed before headers done
 
         call    HTTP_DRAIN_HEADERS
+        jr      c, .abort           ; connection closed during headers
 
         call    HTTP_PARSE_PATH     ; fills fname_buf
 
@@ -437,12 +438,20 @@ HTTP_SERVE_FILE:
         call    CAS_IN_OPEN         ; carry set = OK, carry clear = not found
         jr      nc, .not_found
 
-        ; Send HTTP/1.0 200 OK headers
-        ld      hl, http_200_hdr
-        ld      bc, http_200_hdr_end - http_200_hdr
+        ; Pick Content-Type by extension (.HTM/.HTML → text/html, else text/plain)
+        call    IS_HTML_EXT
+        ld      hl, http_200_hdr_html
+        ld      bc, http_200_hdr_html_end - http_200_hdr_html
+        jr      z, .send_hdr
+        ld      hl, http_200_hdr_plain
+        ld      bc, http_200_hdr_plain_end - http_200_hdr_plain
+
+.send_hdr:
         call    NET_SEND
 
-        ; Read file in FILE_BUF_SIZE chunks, sending each
+        ; Read file in FILE_BUF_SIZE chunks, sending each.
+        ; CHECK_CONNECTION is called before each flush so we stop if the
+        ; peer closes the connection mid-transfer (prevents CAS loops).
         ld      hl, file_buf
         ld      (file_buf_wr), hl
 
@@ -460,6 +469,10 @@ HTTP_SERVE_FILE:
         or      a
         sbc     hl, de
         jr      c, .read_loop       ; carry set = HL < end = room left
+
+        ; Stop if peer already closed (e.g. CAS looping past real EOF)
+        call    CHECK_CONNECTION
+        jr      c, .cas_abort
 
         ld      hl, file_buf
         ld      bc, FILE_BUF_SIZE
@@ -486,10 +499,97 @@ HTTP_SERVE_FILE:
         call    CAS_IN_CLOSE
         ret
 
+.cas_abort:
+        ; Peer closed before CAS signalled EOF — close file and bail
+        call    CAS_IN_CLOSE
+        ret
+
 .not_found:
         ld      hl, http_404_resp
         ld      bc, http_404_resp_end - http_404_resp
         call    NET_SEND
+        ret
+
+; =============================================================================
+; IS_HTML_EXT — Test whether fname_buf ends in .HTM or .HTML
+; Exit: Z set if HTML extension, Z clear otherwise
+; Corrupts: A, HL, BC
+; =============================================================================
+IS_HTML_EXT:
+        ; Find end of fname_buf
+        ld      hl, fname_buf
+.scan:
+        ld      a, (hl)
+        or      a
+        jr      z, .at_end
+        inc     hl
+        jr      .scan
+.at_end:
+        ; HL points to the null terminator. Back up to find the dot.
+        ; Check last 4 chars for ".HTM\0" or last 5 for ".HTML\0"
+        ; Strategy: check byte at (HL-4) for '.' then (HL-3..HL-1) for HTM
+        push    hl
+
+        ; Try ".HTM" — 4 chars before null: . H T M
+        ld      bc, -4
+        add     hl, bc              ; HL → char at position (end-4)
+        ld      a, (hl)
+        cp      '.'
+        jr      nz, .not_htm_short
+        inc     hl
+        ld      a, (hl)
+        cp      'H'
+        jr      nz, .not_htm_short
+        inc     hl
+        ld      a, (hl)
+        cp      'T'
+        jr      nz, .not_htm_short
+        inc     hl
+        ld      a, (hl)
+        cp      'M'
+        jr      nz, .not_htm_short
+        ; Matched ".HTM"
+        pop     hl
+        xor     a                   ; Z set
+        ret
+
+.not_htm_short:
+        pop     hl
+        push    hl
+
+        ; Try ".HTML" — 5 chars before null: . H T M L
+        ld      bc, -5
+        add     hl, bc
+        ld      a, h
+        or      l
+        jr      z, .no_html         ; pointer underflowed (name too short)
+        ld      a, (hl)
+        cp      '.'
+        jr      nz, .no_html
+        inc     hl
+        ld      a, (hl)
+        cp      'H'
+        jr      nz, .no_html
+        inc     hl
+        ld      a, (hl)
+        cp      'T'
+        jr      nz, .no_html
+        inc     hl
+        ld      a, (hl)
+        cp      'M'
+        jr      nz, .no_html
+        inc     hl
+        ld      a, (hl)
+        cp      'L'
+        jr      nz, .no_html
+        ; Matched ".HTML"
+        pop     hl
+        xor     a                   ; Z set
+        ret
+
+.no_html:
+        pop     hl
+        or      1                   ; Z clear
         ret
 
 ; =============================================================================
@@ -531,12 +631,19 @@ str_index_htm:
         db      "INDEX.HTM", 0
 str_index_htm_len equ $ - str_index_htm
 
-http_200_hdr:
+http_200_hdr_html:
+        db      "HTTP/1.0 200 OK", 0x0D, 0x0A
+        db      "Content-Type: text/html", 0x0D, 0x0A
+        db      "Connection: close", 0x0D, 0x0A
+        db      0x0D, 0x0A
+http_200_hdr_html_end:
+
+http_200_hdr_plain:
         db      "HTTP/1.0 200 OK", 0x0D, 0x0A
         db      "Content-Type: text/plain", 0x0D, 0x0A
         db      "Connection: close", 0x0D, 0x0A
         db      0x0D, 0x0A
-http_200_hdr_end:
+http_200_hdr_plain_end:
 
 http_404_resp:
         db      "HTTP/1.0 404 Not Found", 0x0D, 0x0A
