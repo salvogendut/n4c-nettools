@@ -577,4 +577,8 @@ msg_stopping:
         include "n4c-netinit-kv.s"
         include "w5100.s"
 
-SAVE 'HTTPD.BIN',#4000,$-#4000,AMSDOS
+IFDEF AMSDOS_USB
+SAVE 'HTTPDALB.BIN',#4000,$-#4000,AMSDOS
+ELSE
+SAVE 'HTTPDSTD.BIN',#4000,$-#4000,AMSDOS
+ENDIF

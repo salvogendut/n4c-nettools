@@ -45,13 +45,15 @@ RUN"N4CEWEN
 ```
 
 **foal-httpd** — HTTP/1.0 file server (port 80):
-```
-HTTPD.BIN  HTTPD.BAS  N4C.CFG  <files to serve>
-```
-```basic
-RUN"HTTPD
-```
-Press ESC to stop the server. Files are served from the current disk. A bare `/` request returns `INDEX.HTM`. Only files accessible via standard AMSDOS `CAS_IN_OPEN` can be served; CAS_IN is at standard addresses so this works on ULIfAC and stock AMSDOS (not Albireo/GoTek without a separate build).
+
+Unlike the other tools, foal-httpd calls `CAS_IN_OPEN` directly from Z80 to read files at request time, so it ships as two hardware-specific binaries.
+
+| Hardware | Files to copy | Run |
+|----------|--------------|-----|
+| Albireo / GoTek (USB/FAT Unidos) | `HTTPDALB.BIN` `HTTPDALB.BAS` `N4C.CFG` + files to serve | `RUN"HTTPDALB` |
+| ULIfAC / stock AMSDOS | `HTTPDSTD.BIN` `HTTPDSTD.BAS` `N4C.CFG` + files to serve | `RUN"HTTPDSTD` |
+
+Press ESC to stop. A bare `/` request serves `INDEX.HTM`. Multi-segment paths (`/dir/file.txt`) resolve to the last segment.
 
 ## Building from source
 

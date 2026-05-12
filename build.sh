@@ -70,7 +70,8 @@ build_ewenterm() {
 echo ""
 build_tool ntp        ntp.s        NTP.BIN   NTP.BAS   || exit 1
 build_tool wget       wget.s       WGET.BIN  WGET.BAS  || exit 1
-build_tool foal-httpd foal-httpd.s HTTPD.BIN HTTPD.BAS "-DAMSDOS_USB=1" || exit 1
+build_tool foal-httpd foal-httpd.s HTTPDALB.BIN HTTPDALB.BAS "-DAMSDOS_USB=1" || exit 1
+build_tool foal-httpd foal-httpd.s HTTPDSTD.BIN HTTPDSTD.BAS ""              || exit 1
 build_ewenterm || exit 1
 
 echo ""
