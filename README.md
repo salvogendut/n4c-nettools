@@ -13,6 +13,7 @@ Z80 assembly network library and ready-to-run tools for the Amstrad CPC with [Ne
 | `src/ntp/` | SNTPv4 time client — resolves pool, displays UTC date/time |
 | `src/wget/` | HTTP file downloader — fetches files from a URL and saves to disk |
 | `src/n4cewenterm/` | ANSI Telnet terminal client — full VT100/ANSI emulation over TCP |
+| `src/foal-httpd/` | HTTP/1.0 server — serves files from the CPC disk over port 80 |
 
 ## Quick start — running the tools
 
@@ -43,6 +44,15 @@ N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN  N4C.CFG
 RUN"N4CEWEN
 ```
 
+**foal-httpd** — HTTP/1.0 file server (port 80):
+```
+HTTPD.BIN  HTTPD.BAS  N4C.CFG  <files to serve>
+```
+```basic
+RUN"HTTPD
+```
+Press ESC to stop the server. Files are served from the current disk. A bare `/` request returns `INDEX.HTM`. Only files accessible via standard AMSDOS `CAS_IN_OPEN` can be served; CAS_IN is at standard addresses so this works on ULIfAC and stock AMSDOS (not Albireo/GoTek without a separate build).
+
 ## Building from source
 
 Requires [RASM](https://github.com/EdouardBERGE/rasm) assembler.
@@ -54,7 +64,8 @@ Requires [RASM](https://github.com/EdouardBERGE/rasm) assembler.
 Output:
 
 ```
-tools/bin/   NTP.BIN  NTP.BAS  WGET.BIN  WGET.BAS  N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
+tools/bin/   NTP.BIN  NTP.BAS  WGET.BIN  WGET.BAS  HTTPD.BIN  HTTPD.BAS
+             N4CEWEN.BIN  N4CEWEN.BAS  CHARSET.BIN
 ```
 
 CR+LF line endings are applied to all `.BAS` output files automatically.
@@ -78,6 +89,9 @@ src/
   wget/
     wget.s              HTTP file downloader
     WGET.BAS            BASIC loader
+  foal-httpd/
+    foal-httpd.s        HTTP/1.0 server (listens on port 80, serves files from disk)
+    HTTPD.BAS           BASIC loader
   n4cewenterm/
     termN4C.s           Main entry point
     charset.s           Code page 437 character set (loaded at 0x6800)
